@@ -1,1 +1,14 @@
-venv
+# Python
+venv/
+__pycache__/
+*.pyc
+chroma_db/
+
+# Node
+node_modules/
+dist/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
