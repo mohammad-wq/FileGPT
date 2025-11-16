@@ -1,47 +1,74 @@
-# llm_handler.py
+# backend/services/llmHandler.py
 
 import ollama
+import json
 
-def get_answer_from_llm(context, query):
+# --- Configuration ---
+# Make sure you have run: ollama run llama3:8b
+LLM_MODEL = "llama3:8b"
+
+def get_answer_from_llm(query: str, context: list[str]):
     """
-    Sends the context and query to the local LLM to generate an answer.
+    Sends the user's query and the retrieved context to the local LLM
+    to generate a natural language answer.
+    
+    Args:
+        query: The user's original question.
+        context: A list of relevant text chunks found in the database.
+    
+    Returns:
+        A string containing the LLM's answer.
     """
-    # This is a simple prompt template. You can refine it.
+    
+    # Combine the context chunks into a single string
+    context_str = "\n\n".join(context)
+    
+    # This is the prompt template. It instructs the LLM how to behave.
     prompt = f"""
-    Using only the following context, answer the user's question.
-    If the answer is not available in the context, say "I don't have enough information to answer that."
+    You are a helpful assistant for the FileGPT project.
+    Answer the user's question based ONLY on the provided context.
+    If the answer is not in the context, say "I could not find an answer in the provided files."
+    Do not make up information.
 
-    Context:
-    {context}
+    --- CONTEXT ---
+    {context_str}
+    --- END OF CONTEXT ---
 
-    Question:
+    USER'S QUESTION:
     {query}
     """
     
-    print("Sending prompt to LLM...")
+    print(f"\n[LLM Handler] Sending prompt to {LLM_MODEL}...")
     
-    # Stream the response from the LLM
-    response = ollama.chat(
-        model='llama3:8b',
-        messages=[{'role': 'user', 'content': prompt}],
-        stream=True
-    )
-    
-    full_answer = ""
-    print("\n--- Generated Answer ---")
-    for chunk in response:
-        # Print each chunk as it arrives
-        part = chunk['message']['content']
-        print(part, end='', flush=True)
-        full_answer += part
-    
-    print("\n------------------------\n")
-    return full_answer
+    try:
+        # Send the complete prompt to Ollama
+        response = ollama.chat(
+            model=LLM_MODEL,
+            messages=[
+                {'role': 'user', 'content': prompt}
+            ]
+        )
+        
+        return response['message']['content']
+        
+    except Exception as e:
+        print(f"[LLM Handler] Error communicating with Ollama: {e}")
+        # This could happen if Ollama isn't running
+        return "Error: Could not connect to the local AI model. Please ensure Ollama is running."
 
-# --- EXAMPLE USAGE ---
+# --- Example Usage (for testing this file directly) ---
 if __name__ == "__main__":
-    # This is the context we "found" in the previous step
-    sample_context = "Key features include semantic search, summarization, and file Q&A.\nThe project, named FileGPT, aims to solve file management issues."
-    user_query = "What features does FileGPT have?"
-
-    get_answer_from_llm(sample_context, user_query)
+    
+    # Make sure Ollama is running and you have pulled the model:
+    # ollama run llama3:8b
+    
+    print("--- Testing LLM Handler ---")
+    test_query = "What is FileGPT?"
+    test_context = [
+        "The FileGPT project aims to build a local-first AI file manager.",
+        "It uses ChromaDB for vector storage and React for the frontend."
+    ]
+    
+    answer = get_answer_from_llm(test_query, test_context)
+    print(f"\nQuery: {test_query}")
+    print(f"Answer: {answer}")
