@@ -28,16 +28,25 @@ except ImportError as e:
 print("Checking Ollama connection...")
 try:
     models = ollama.list()
-    print("✓ Ollama is running")
+    print("[OK] Ollama is running")
     
-    # Check if llama3:8b is installed
-    has_llama3 = any('llama3' in model.get('name', '') for model in models.get('models', []))
-    if not has_llama3:
-        print("\n⚠️  Warning: llama3:8b model not found")
-        print("   Please install: ollama pull llama3:8b")
+    # Check if llama3.2:3b is installed (used for summarization)
+    model_list = models.get('models', [])
+    has_llama3_2 = any('llama3.2:3b' in model.get('name', '') for model in model_list)
+    has_llama3_8b = any('llama3:8b' in model.get('name', '') for model in model_list)
+    
+    if not has_llama3_2 and not has_llama3_8b:
+        print("\n[WARNING] No llama3 model found")
+        print("   Please install one of:")
+        print("     ollama pull llama3.2:3b  (Recommended - smaller, 2GB RAM)")
+        print("     ollama pull llama3:8b    (Larger, better quality)")
         print("   The server will start but summarization will fail.\n")
+    elif has_llama3_2:
+        print("✓ Found llama3.2:3b - summarization will use this model")
+    elif has_llama3_8b:
+        print("✓ Found llama3:8b - will use llama3.2:3b if available, or llama3:8b as fallback")
 except Exception as e:
-    print(f"\n⚠️  Warning: Could not connect to Ollama - {e}")
+    print(f"\n[WARNING] Could not connect to Ollama - {e}")
     print("   Please ensure Ollama is running: ollama serve")
     print("   The server will start but summarization will fail.\n")
 
@@ -45,8 +54,8 @@ print("\n" + "=" * 60)
 print("Starting FileGPT Backend Server")
 print("=" * 60)
 print("\nServer will be available at:")
-print("  • http://127.0.0.1:8000")
-print("  • API Docs: http://127.0.0.1:8000/docs")
+print("  - http://127.0.0.1:8000")
+print("  - API Docs: http://127.0.0.1:8000/docs")
 print("\nPress Ctrl+C to stop the server")
 print("=" * 60 + "\n")
 

@@ -152,14 +152,18 @@ def index_file_pipeline(file_path: str) -> bool:
             print(f"Note: Could not delete old chunks for {file_path}: {e}")
         
         # Step 6: Index in ChromaDB (Vector)
-        chunk_ids = [f"{file_path}:chunk:{i}" for i in range(len(chunks))]
-        metadatas = [{"source": file_path, "summary": summary, "chunk_index": i} for i in range(len(chunks))]
-        
-        _chroma_collection.add(
-            documents=chunks,
-            metadatas=metadatas,
-            ids=chunk_ids
-        )
+        try:
+            chunk_ids = [f"{file_path}:chunk:{i}" for i in range(len(chunks))]
+            metadatas = [{"source": file_path, "summary": summary, "chunk_index": i} for i in range(len(chunks))]
+            
+            _chroma_collection.add(
+                documents=chunks,
+                metadatas=metadatas,
+                ids=chunk_ids
+            )
+        except Exception as e:
+            print(f"Warning: ChromaDB indexing failed for {file_path}: {e}")
+            print("Continuing with BM25 indexing only...")
         
         # Step 7: Update BM25 index (Keyword)
         # Remove old chunks for this file from BM25

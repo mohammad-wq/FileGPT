@@ -8,8 +8,35 @@ import ollama
 
 
 # Model configuration
-MODEL_NAME = "llama3:8b"
+PRIMARY_MODEL = "llama3.2:3b"  # Smaller model, only needs ~2GB RAM
+FALLBACK_MODEL = "llama3:8b"   # Larger model, better quality but needs ~5GB RAM
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
+
+
+def get_available_model() -> str:
+    """
+    Get the first available model from the priority list.
+    
+    Returns:
+        Model name to use
+    """
+    try:
+        models = ollama.list()
+        model_names = [m.get('name', '') for m in models.get('models', [])]
+        
+        # Try primary model first
+        if PRIMARY_MODEL in model_names:
+            return PRIMARY_MODEL
+        
+        # Fall back to larger model
+        if FALLBACK_MODEL in model_names:
+            print(f"Note: Using fallback model {FALLBACK_MODEL} (llama3.2:3b not found)")
+            return FALLBACK_MODEL
+        
+        # Default to primary even if not found (will error gracefully later)
+        return PRIMARY_MODEL
+    except Exception:
+        return PRIMARY_MODEL
 
 
 def generate_summary(content: str, file_path: str) -> str:
@@ -43,9 +70,12 @@ Provide a summary that describes:
 Summary:"""
     
     try:
+        # Get available model
+        model_name = get_available_model()
+        
         # Call Ollama for local inference
         response = ollama.chat(
-            model=MODEL_NAME,
+            model=model_name,
             messages=[
                 {
                     'role': 'user',
@@ -67,8 +97,11 @@ Summary:"""
         return summary
         
     except Exception as e:
-        print(f"Error generating summary for {file_path}: {e}")
-        return f"Summary unavailable (Error: {str(e)[:100]})"
+        error_msg = str(e)
+        print(f"Warning: Summary generation failed for {file_path}: {error_msg[:100]}")
+        # Return a simple fallback summary based on file type
+        file_ext = file_path.split('.')[-1].lower()
+        return f"[{file_ext.upper()} file - Summary unavailable due to insufficient memory]"
 
 
 def test_ollama_connection() -> bool:
@@ -79,8 +112,9 @@ def test_ollama_connection() -> bool:
         True if connection successful, False otherwise
     """
     try:
+        model_name = get_available_model()
         response = ollama.chat(
-            model=MODEL_NAME,
+            model=model_name,
             messages=[
                 {
                     'role': 'user',
@@ -102,9 +136,10 @@ def get_model_info() -> Optional[dict]:
         Model information dictionary, or None if unavailable
     """
     try:
+        model_name = get_available_model()
         models = ollama.list()
         for model in models.get('models', []):
-            if MODEL_NAME in model.get('name', ''):
+            if model_name in model.get('name', ''):
                 return model
         return None
     except Exception as e:

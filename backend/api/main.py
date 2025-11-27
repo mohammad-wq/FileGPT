@@ -4,6 +4,7 @@ REST API server with file management, search, and AI chat capabilities.
 """
 
 import os
+import sys
 import shutil
 import threading
 from typing import List, Optional
@@ -12,18 +13,28 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import uvicorn
 import ollama
 
-# Import services
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+# Add services to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'services'))
+sys.path.insert(0, os.path.dirname(__file__))
 
-from services import searchEngine, file_watcher, metadata_db, categorization_service
+# Import all backend services
+from services import (
+    searchEngine, 
+    metadata_db, 
+    file_watcher, 
+    index_manager,
+    router_service,
+    summary_service,
+    doclingDocumentParser
+)
 
-
-# Pydantic models for request/response
-class AddFolderRequest(BaseModel):
-    path: str
+try:
+    from services import categorization_service
+except ImportError:
+    categorization_service = None  # Optional service
 
 class SearchRequest(BaseModel):
     query: str
@@ -32,6 +43,9 @@ class SearchRequest(BaseModel):
 class AskRequest(BaseModel):
     query: str
     k: Optional[int] = 5
+
+class AddFolderRequest(BaseModel):
+    path: str
 
 class CreateFolderRequest(BaseModel):
     path: str
@@ -98,10 +112,8 @@ async def startup_event():
     searchEngine.initialize_indexes()
     print("✓ Search indexes loaded")
     
-    # Start file watcher in background thread
-    watcher_thread = threading.Thread(target=file_watcher.start_watcher, daemon=True)
-    watcher_thread.start()
-    print("✓ File watcher started")
+    # Get index manager
+    idx_mgr = index_manager.get_index_manager()
     
     # Auto-index common user directories (PC-wide monitoring)
     user_home = str(Path.home())
@@ -111,11 +123,33 @@ async def startup_event():
         os.path.join(user_home, "Downloads"),
     ]
     
-    print("\n📁 Auto-monitoring common directories:")
+    print("\n📁 Initializing directory monitoring:")
+    
+    # Perform smart scan (full on first run, incremental on subsequent runs)
     for path in default_paths:
         if os.path.exists(path):
-            watcher = file_watcher.get_watcher()
-            watcher.add_path(path)
+            idx_mgr.smart_scan_directory(path)
+    
+    # Clean up deleted files
+    idx_mgr.cleanup_deleted_files()
+    
+    # Start file watcher in background thread for real-time updates
+    def run_watcher():
+        watcher = file_watcher.get_watcher()
+        # Add paths to watcher
+        for path in default_paths:
+            if os.path.exists(path):
+                watcher.add_path(path)
+        watcher.start()
+    
+    watcher_thread = threading.Thread(target=run_watcher, daemon=True)
+    watcher_thread.start()
+    print("✓ File watcher started")
+    
+    # Print watched paths
+    print("\n📁 Watching directories:")
+    for path in default_paths:
+        if os.path.exists(path):
             print(f"  • {path}")
     
     print("\n" + "=" * 60)
@@ -197,45 +231,60 @@ async def search(request: SearchRequest):
 async def ask(request: AskRequest):
     """
     Ask a question and get AI-generated answer with context from indexed files.
+    Supports SEARCH, ACTION, and CHAT intents.
     
     Args:
         request: Contains question and optional k (number of context chunks)
         
     Returns:
-        AI-generated answer with source references
+        AI-generated answer with source references and intent information
     """
-    # Get relevant context using hybrid search
-    search_results = searchEngine.hybrid_search(request.query, k=request.k)
+    # Route the query to determine intent
+    route_result = router_service.route_query(request.query)
+    intent = route_result.get("intent", "CHAT")
+    parameters = route_result.get("parameters", {})
     
-    if not search_results:
-        return {
-            "answer": "I couldn't find any relevant files to answer your question. Try adding more folders or indexing more files.",
-            "sources": []
-        }
+    print(f"Intent detected: {intent}")
+    print(f"Parameters: {parameters}")
     
-    # Build context string from search results
-    context_parts = []
-    sources = []
-    
-    for i, result in enumerate(search_results):
-        context_parts.append(f"--- Source {i+1}: {result['source']} ---")
-        if result.get('summary'):
-            context_parts.append(f"Summary: {result['summary']}")
-        context_parts.append(f"Content: {result['content']}")
-        context_parts.append("")
+    # Handle SEARCH intent
+    if intent == "SEARCH":
+        search_query = parameters.get("query", request.query)
         
-        sources.append({
-            "path": result['source'],
-            "summary": result.get('summary', ''),
-            "relevance_score": result.get('score', 0)
-        })
-    
-    context = "\n".join(context_parts)
-    
-    # Build prompt for LLM
-    prompt = f"""You are a helpful AI assistant with access to the user's files. Answer the following question based on the provided context from their indexed files.
+        # Get relevant context using hybrid search
+        search_results = searchEngine.hybrid_search(search_query, k=request.k)
+        
+        if not search_results:
+            return {
+                "answer": "I couldn't find any relevant files to answer your question. Try adding more folders or indexing more files.",
+                "sources": [],
+                "intent": "SEARCH",
+                "context_used": 0
+            }
+        
+        # Build context string from search results
+        context_parts = []
+        sources = []
+        
+        for i, result in enumerate(search_results):
+            context_parts.append(f"--- Source {i+1}: {result['source']} ---")
+            if result.get('summary'):
+                context_parts.append(f"Summary: {result['summary']}")
+            context_parts.append(f"Content: {result['content']}")
+            context_parts.append("")
+            
+            sources.append({
+                "path": result['source'],
+                "summary": result.get('summary', ''),
+                "relevance_score": result.get('score', 0)
+            })
+        
+        context = "\n".join(context_parts)
+        
+        # Build prompt for LLM
+        prompt = f"""You are a helpful AI assistant with access to the user's files. Answer the following question based on the provided context from their indexed files.
 
-Question: {request.query}
+Question: {search_query}
 
 Context from files:
 {context}
@@ -247,33 +296,147 @@ Instructions:
 4. Keep your answer concise and helpful
 
 Answer:"""
-    
-    try:
-        # Call Ollama for answer generation
-        response = ollama.chat(
-            model="llama3:8b",
-            messages=[
-                {
-                    'role': 'user',
-                    'content': prompt
+        
+        try:
+            # Call Ollama for answer generation
+            response = ollama.chat(
+                model="llama3.2:3b",
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ],
+                options={
+                    'temperature': 0.7,
+                    'num_predict': 500,
                 }
-            ],
-            options={
-                'temperature': 0.7,
-                'num_predict': 500,
+            )
+            
+            answer = response['message']['content'].strip()
+            
+            return {
+                "answer": answer,
+                "sources": sources,
+                "intent": "SEARCH",
+                "context_used": len(search_results)
             }
-        )
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+    
+    # Handle ACTION intent
+    elif intent == "ACTION":
+        action = parameters.get("action", "unknown")
+        target = parameters.get("target", "")
+        details = parameters.get("details", "")
         
-        answer = response['message']['content'].strip()
+        try:
+            # ===== CREATE_FOLDER =====
+            if action == "create_folder":
+                folder_path = target
+                # Handle relative paths
+                if not os.path.isabs(folder_path):
+                    user_home = str(Path.home())
+                    folder_path = os.path.join(user_home, "Desktop", folder_path)
+                
+                os.makedirs(folder_path, exist_ok=True)
+                return {
+                    "answer": f"✅ Successfully created folder: {folder_path}",
+                    "sources": [],
+                    "intent": "ACTION",
+                    "action_executed": True,
+                    "path": folder_path
+                }
+            
+            # ===== DELETE (with safety check) =====
+            elif action == "delete":
+                if not os.path.exists(target):
+                    return {
+                        "answer": f"❌ Path not found: {target}",
+                        "intent": "ACTION",
+                        "action_executed": False
+                    }
+                
+                # SAFETY: Require confirmation for destructive operations
+                return {
+                    "answer": f"⚠️ Delete requested: {target}\n\nFor safety, please confirm using /delete endpoint or frontend.",
+                    "intent": "ACTION",
+                    "action_executed": False,
+                    "requires_confirmation": True,
+                    "delete_target": target
+                }
+            
+            # ===== ORGANIZE (AI-powered) =====
+            elif action == "organize":
+                return {
+                    "answer": f"📁 Organization request detected: '{target}'\n\nUse the frontend's AI organization workflow for approval and execution.",
+                    "intent": "ACTION",
+                    "action_executed": False,
+                    "suggestion": "use_frontend_organization",
+                    "organization_query": target
+                }
+            
+            # ===== MOVE/RENAME (require explicit parameters) =====
+            elif action in ["move", "rename"]:
+                return {
+                    "answer": f"I understood you want to {action} something.\n\nPlease use the /{action} endpoint with explicit source and destination for safety.",
+                    "intent": "ACTION",
+                    "action_executed": False
+                }
+            
+            # ===== UNKNOWN ACTION =====
+            else:
+                return {
+                    "answer": f"I understood '{action}' on '{target}' but this action isn't yet supported via chat.\n\nSupported: create_folder, organize\nUse dedicated endpoints for: move, delete, rename",
+                    "intent": "ACTION",
+                    "action_executed": False,
+                    "action_details": {"action": action, "target": target}
+                }
+                
+        except Exception as e:
+            return {
+                "answer": f"❌ Error executing {action}: {str(e)}",
+                "intent": "ACTION",
+                "action_executed": False,
+                "error": str(e)
+            }
+    
+    # Handle CHAT intent
+    else:
+        # General conversation without file context
+        prompt = f"""You are a helpful assistant. Answer the following question or respond to the message.
+
+User: {request.query}
+
+Respond helpfully and conversationally:"""
         
-        return {
-            "answer": answer,
-            "sources": sources,
-            "context_used": len(search_results)
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+        try:
+            response = ollama.chat(
+                model="llama3.2:3b",
+                messages=[
+                    {
+                        'role': 'user',
+                        'content': prompt
+                    }
+                ],
+                options={
+                    'temperature': 0.7,
+                    'num_predict': 500,
+                }
+            )
+            
+            answer = response['message']['content'].strip()
+            
+            return {
+                "answer": answer,
+                "sources": [],
+                "intent": "CHAT",
+                "context_used": 0
+            }
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
 
 
 @app.post("/create_folder")
@@ -470,6 +633,9 @@ async def categorize(request: CategorizeRequest):
     Returns:
         List of files that match the category with confidence scores
     """
+    if not categorization_service:
+        raise HTTPException(status_code=501, detail="Categorization service not available")
+    
     result = categorization_service.categorize_files(
         category_description=request.category_description,
         search_path=request.search_path,
@@ -492,6 +658,9 @@ async def organize(request: OrganizeRequest):
     Returns:
         Results of the organization operation including files moved
     """
+    if not categorization_service:
+        raise HTTPException(status_code=501, detail="Categorization service not available")
+    
     result = categorization_service.auto_organize_by_category(
         category_description=request.category_description,
         destination_folder=request.destination_folder,
@@ -514,6 +683,9 @@ async def suggest_categories(request: SuggestCategoriesRequest):
     Returns:
         List of suggested categories with descriptions
     """
+    if not categorization_service:
+        raise HTTPException(status_code=501, detail="Categorization service not available")
+    
     suggestions = categorization_service.suggest_categories(request.file_paths)
     
     return {
@@ -523,5 +695,4 @@ async def suggest_categories(request: SuggestCategoriesRequest):
 
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

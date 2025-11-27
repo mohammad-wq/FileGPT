@@ -1,14 +1,81 @@
 # Python
 venv/
+.venv/
 __pycache__/
-*.pyc
-chroma_db/
-
-# Node
-node_modules/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
 dist/
-.env
+build/
+*.pyc
+*.pyo
 
-# OS
+# Virtual environments
+env/
+ENV/
+venv.bak/
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+chroma_db/
+filegpt_metadata.db
+
+# BM25 index files
+bm25_index.pkl
+
+# Temporary/cache files  
+*.pkl
+*.cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Node.js / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+dist-ssr/
+*.local
+
+# Build outputs
+build/
+*.spec
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Tauri
+**/target/
+**/.cargo/
+
+# Temporary files
+*.tmp
+*.temp
+fix_startup.py
