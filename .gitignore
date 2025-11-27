@@ -28,6 +28,9 @@ filegpt_metadata.db
 # BM25 index files
 bm25_index.pkl
 
+# Index state tracking
+index_state.json
+
 # Temporary/cache files  
 *.pkl
 *.cache
@@ -78,4 +81,19 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Development/debugging files
 fix_startup.py
+_add_endpoints.py
+backend/fix_startup.py
+backend/_add_endpoints.py
+
+# Embedding models cache (optional - comment out if you want to commit models)
+# sentence_transformers_cache/
+# .cache/huggingface/
+
+# ChromaDB persistence
+backend/chroma_db/
+
+# ONNX model cache (can be large)
+*.onnx
