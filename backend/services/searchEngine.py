@@ -156,8 +156,12 @@ def index_file_pipeline(file_path: str) -> bool:
             chunk_ids = [f"{file_path}:chunk:{i}" for i in range(len(chunks))]
             metadatas = [{"source": file_path, "summary": summary, "chunk_index": i} for i in range(len(chunks))]
             
+            # Generate embeddings manually using the SentenceTransformer model
+            embeddings = _embedding_model.encode(chunks, show_progress_bar=False).tolist()
+            
             _chroma_collection.add(
                 documents=chunks,
+                embeddings=embeddings,  # Provide embeddings explicitly
                 metadatas=metadatas,
                 ids=chunk_ids
             )
@@ -243,8 +247,11 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
     
     # Semantic search with ChromaDB
     try:
+        # Generate query embedding manually
+        query_embedding = _embedding_model.encode([query], show_progress_bar=False).tolist()
+        
         chroma_results = _chroma_collection.query(
-            query_texts=[query],
+            query_embeddings=query_embedding,  # Pass embeddings instead of texts
             n_results=min(k, _chroma_collection.count())
         )
         

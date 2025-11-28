@@ -10,11 +10,12 @@ import threading
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 import ollama
+import asyncio
 
 # Add services to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'services'))
@@ -299,8 +300,9 @@ Answer:"""
         
         try:
             # Call Ollama for answer generation
+            model_name = summary_service.get_available_model()
             response = ollama.chat(
-                model="llama3.2:3b",
+                model=model_name,
                 messages=[
                     {
                         'role': 'user',
@@ -412,8 +414,9 @@ User: {request.query}
 Respond helpfully and conversationally:"""
         
         try:
+            model_name = summary_service.get_available_model()
             response = ollama.chat(
-                model="llama3.2:3b",
+                model=model_name,
                 messages=[
                     {
                         'role': 'user',
@@ -614,6 +617,37 @@ async def get_watched_folders():
     return {
         "folders": watcher.get_watched_paths()
     }
+
+
+@app.websocket("/ws/logs")
+async def websocket_logs(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time file watcher logs.
+    """
+    await websocket.accept()
+    
+    # Create a queue for this connection
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    
+    # Subscribe to broadcaster
+    broadcaster = file_watcher.get_broadcaster()
+    broadcaster.subscribe(queue, loop)
+    
+    try:
+        while True:
+            # Wait for message
+            message = await queue.get()
+            
+            # Send to client
+            await websocket.send_text(message)
+            
+    except WebSocketDisconnect:
+        broadcaster.unsubscribe(queue)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        broadcaster.unsubscribe(queue)
+
 
 
 # ============================================================================

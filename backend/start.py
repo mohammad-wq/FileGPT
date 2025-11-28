@@ -30,21 +30,25 @@ try:
     models = ollama.list()
     print("[OK] Ollama is running")
     
-    # Check if llama3.2:3b is installed (used for summarization)
+    # Check if qwen2.5:0.5b is installed (used for summarization)
     model_list = models.get('models', [])
+    has_qwen = any('qwen2.5:0.5b' in model.get('name', '') for model in model_list)
     has_llama3_2 = any('llama3.2:3b' in model.get('name', '') for model in model_list)
     has_llama3_8b = any('llama3:8b' in model.get('name', '') for model in model_list)
     
-    if not has_llama3_2 and not has_llama3_8b:
-        print("\n[WARNING] No llama3 model found")
-        print("   Please install one of:")
-        print("     ollama pull llama3.2:3b  (Recommended - smaller, 2GB RAM)")
-        print("     ollama pull llama3:8b    (Larger, better quality)")
-        print("   The server will start but summarization will fail.\n")
+    if has_qwen:
+        print("✓ Found qwen2.5:0.5b - summarization will use this model (500MB RAM)")
     elif has_llama3_2:
-        print("✓ Found llama3.2:3b - summarization will use this model")
+        print("✓ Found llama3.2:3b - summarization will use this model (2GB RAM)")
     elif has_llama3_8b:
-        print("✓ Found llama3:8b - will use llama3.2:3b if available, or llama3:8b as fallback")
+        print("✓ Found llama3:8b - summarization will use this model (6GB RAM)")
+    else:
+        print("\n[WARNING] No compatible model found")
+        print("   Please install one of:")
+        print("     ollama pull qwen2.5:0.5b  (Recommended - smallest, 500MB RAM)")
+        print("     ollama pull llama3.2:3b  (Medium - 2GB RAM)")
+        print("     ollama pull llama3:8b    (Larger - better quality, 6GB RAM)")
+        print("   The server will start but summarization will fail.\n")
 except Exception as e:
     print(f"\n[WARNING] Could not connect to Ollama - {e}")
     print("   Please ensure Ollama is running: ollama serve")

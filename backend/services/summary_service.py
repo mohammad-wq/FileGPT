@@ -8,7 +8,7 @@ import ollama
 
 
 # Model configuration
-PRIMARY_MODEL = "llama3.2:3b"  # Smaller model, only needs ~2GB RAM
+PRIMARY_MODEL = "qwen2.5:0.5b"  # Smaller model, only needs ~500MB RAM
 FALLBACK_MODEL = "llama3:8b"   # Larger model, better quality but needs ~5GB RAM
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
