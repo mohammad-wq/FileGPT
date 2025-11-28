@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 use std::mem;
 use std::ffi::c_void;
+use std::path::Path;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -43,7 +44,7 @@ impl SendPtr {
 
 fn main() {
     println!("=== NTFS USN Journal Realtime Monitor (Rust) ===");
-    println!("Monitoring for file system changes...\n");
+    println!("Monitoring for file system changes (filtering system/temp files)...\n");
 
     unsafe {
         let drives_mask = GetLogicalDrives();
@@ -121,6 +122,103 @@ fn main() {
     loop {
         thread::sleep(Duration::from_secs(1));
     }
+}
+
+fn get_file_extension(filename: &str) -> String {
+    Path::new(filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{}", ext))
+        .unwrap_or_else(|| "[no extension]".to_string())
+}
+
+fn get_file_type(filename: &str) -> &'static str {
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    
+    match ext.to_lowercase().as_str() {
+        // Documents
+        "txt" | "doc" | "docx" | "pdf" | "rtf" | "odt" => "Document",
+        "xls" | "xlsx" | "csv" | "ods" => "Spreadsheet",
+        "ppt" | "pptx" | "odp" => "Presentation",
+        
+        // Images
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" => "Image",
+        
+        // Videos
+        "mp4" | "avi" | "mkv" | "mov" | "wmv" | "flv" | "webm" => "Video",
+        
+        // Audio
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "wma" | "m4a" => "Audio",
+        
+        // Archives
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" => "Archive",
+        
+        // Code
+        "rs" | "py" | "js" | "ts" | "java" | "cpp" | "c" | "h" | "cs" => "Code",
+        "html" | "css" | "json" | "xml" | "yaml" | "yml" => "Markup",
+        
+        // Executables
+        "exe" | "dll" | "msi" | "bat" | "cmd" | "ps1" => "Executable",
+        
+        // System
+        "ini" | "cfg" | "conf" | "log" => "Config",
+        "db" | "sqlite" | "mdb" => "Database",
+        
+        "" => "Folder/No Extension",
+        _ => "Other"
+    }
+}
+
+fn is_system_or_temp_file(filename: &str) -> bool {
+    let name_lower = filename.to_lowercase();
+    
+    // Temporary files
+    // if name_lower.starts_with('~') || 
+    //    name_lower.starts_with(".tmp") ||
+    //    name_lower.ends_with(".tmp") ||
+    //    name_lower.ends_with(".temp") ||
+    //    name_lower.contains("~$") ||
+    //    name_lower.contains(".ldb") ||
+    //    name_lower.contains(".log") ||
+    //    name_lower.contains(".vscdb-journal") ||
+    //    name_lower.contains(".interim") ||
+    //    name_lower.contains(".crdownload") ||
+    //    name_lower.contains(".part") ||
+    //    name_lower.contains(".download") {
+    //     return true;
+    // }
+
+    // if name_lower.ends_with(".lnk") ||
+    //    name_lower.ends_with(".url") ||
+    //    name_lower.ends_with(".pf") ||
+    //    name_lower.contains("log_") 
+    //    {
+    //     return true;
+    // }
+    
+    // // Windows system/cache files
+    // if name_lower == "thumbs.db" ||
+    //    name_lower == "desktop.ini" ||
+    //    name_lower == "~wrl0001.tmp" ||
+    //    name_lower.ends_with(".lock") ||
+    //    name_lower.ends_with(".lck") ||
+    //    name_lower.ends_with(".cache") ||
+    //    name_lower.ends_with(".etl") ||
+    //    name_lower.ends_with(".regtrans-ms") ||
+    //    name_lower.ends_with(".blf") ||
+    //    name_lower.ends_with(".$$$") ||
+    //    name_lower.starts_with("$recycle.bin") ||
+    //    name_lower.starts_with("system volume information") ||
+    //    name_lower == "pagefile.sys" ||
+    //    name_lower == "hiberfil.sys" ||
+    //    name_lower == "swapfile.sys" {
+    //     return true;
+    // }
+    
+    false
 }
 
 unsafe fn tail_volume(h: HANDLE, vol_name: String) {
@@ -242,23 +340,38 @@ unsafe fn tail_volume(h: HANDLE, vol_name: String) {
             let name_slice = std::slice::from_raw_parts(name_ptr, name_len_u16);
             let name = OsString::from_wide(name_slice).to_string_lossy().to_string();
 
+            // Skip system and temporary files
+            if is_system_or_temp_file(&name) {
+                offset += rec.RecordLength as usize;
+                continue;
+            }
+
             let timestamp = format_timestamp();
+            let file_ext = get_file_extension(&name);
+            let file_type = get_file_type(&name);
 
             // Color-coded output based on operation type
-            let icon = if rec.Reason & USN_REASON_FILE_CREATE != 0 {
-                "✨ CREATE"
+            let operation = if rec.Reason & USN_REASON_FILE_CREATE != 0 {
+                "CREATE"
             } else if rec.Reason & USN_REASON_FILE_DELETE != 0 {
-                "🗑️  DELETE"
+                "DELETE"
             } else if rec.Reason & USN_REASON_RENAME_NEW_NAME != 0 {
-                "📝 RENAME"
+                "RENAME"
             } else if rec.Reason & (USN_REASON_DATA_OVERWRITE | USN_REASON_DATA_EXTEND) != 0 {
-                "✏️  MODIFY"
+                "MODIFY"
             } else {
-                "📄 CHANGE"
+                "CHANGE"
             };
 
-            println!("[{}] {} | {} | USN={} | FileRef={:016X}", 
-                timestamp, icon, name, rec.Usn, rec.FileReferenceNumber);
+            println!("[{}] {} | File: {} | Type: {} | Ext: {} | USN: {} | FileRef: {:016X}", 
+                timestamp, 
+                operation, 
+                name, 
+                file_type,
+                file_ext,
+                rec.Usn, 
+                rec.FileReferenceNumber
+            );
 
             offset += rec.RecordLength as usize;
         }
