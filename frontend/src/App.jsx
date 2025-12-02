@@ -5,6 +5,8 @@ import apiClient from "./api/client";
 import toast from "./utils/toast";
 import FileCard from "./components/FileCard";
 import OrganizationApprovalModal from "./components/OrganizationApprovalModal";
+import SearchView from "./components/SearchView";
+import ReactMarkdown from "react-markdown";
 import { parseDestinationPath, parseCategoryDescription } from "./utils/pathUtils";
 
 function App() {
@@ -14,6 +16,7 @@ function App() {
   const [backendStatus, setBackendStatus] = useState("offline");
   const [stats, setStats] = useState(null);
   const [organizationPlan, setOrganizationPlan] = useState(null);
+  const [currentView, setCurrentView] = useState("chat"); // 'chat' or 'search'
   const messagesEndRef = useRef(null);
 
   // Check backend status on mount
@@ -41,8 +44,8 @@ function App() {
   };
 
   /**
-   * Intelligent query parser
-   * Detects if query is for file organization or search/Q&A
+   * Intelligent query parser with semantic search detection
+   * Detects if query is for file organization, explicit search, or Q&A
    */
   const parseQuery = (query) => {
     const lowerQuery = query.toLowerCase();
@@ -67,7 +70,7 @@ function App() {
       return { type: "organize", query };
     }
 
-    // Search keywords
+    // Enhanced search keywords - more comprehensive for semantic search
     const searchKeywords = [
       "show me",
       "find",
@@ -76,31 +79,104 @@ function App() {
       "display",
       "get all",
       "where are",
+      "locate",
+      "files about",
+      "files on",
+      "documents about",
+      "look for",
+      "all my",
+      "my files",
     ];
 
     const isSearch = searchKeywords.some((keyword) =>
       lowerQuery.includes(keyword)
     );
 
-    if (isSearch) {
+    // Also check for file type queries (semantic search is great for these)
+    const fileTypePatterns = [
+      /\b(python|java|javascript|c\+\+|typescript|html|css)\s+(files?|scripts?|code)\b/i,
+      /\b(pdf|docx?|xlsx?|pptx?|txt|csv)\s+(files?|documents?)\b/i,
+      /\.(py|js|java|cpp|ts|html|css|pdf|docx?|xlsx?|txt)\b/i,
+    ];
+
+    const isFileTypeQuery = fileTypePatterns.some((pattern) =>
+      pattern.test(query)
+    );
+
+    if (isSearch || isFileTypeQuery) {
       return { type: "search", query };
     }
 
-    // Default: treat as Q&A
+    // Default: treat as Q&A (which also uses semantic search via RAG)
     return { type: "ask", query };
   };
 
   /**
-   * Handle file search
+   * Handle file search with semantic understanding
    */
+
   const handleSearch = async (query) => {
     try {
+      // Perform semantic search
       const response = await apiClient.search(query, 10);
 
       if (response.results && response.results.length > 0) {
+        // Generate intelligent summary of search results using AI
+        const topResults = response.results.slice(0, 5);
+        const contextParts = [];
+
+        for (const result of topResults) {
+          contextParts.push(`File: ${result.source}`);
+          if (result.summary) {
+            contextParts.push(`Summary: ${result.summary}`);
+          }
+        }
+
+        // Create AI response about the search results
+        let aiSummary = "";
+        try {
+          const summaryPrompt = `Based on the user's search for "${query}", I found ${response.results.length} files. Here are the top matches:
+
+${contextParts.join('\n')}
+
+Generate a response in MARKDOWN format with the following structure:
+1. Start with a brief introductory sentence
+2. Use "## 📁 Search Results" as a heading
+3. List each file as a numbered item with:
+   - **File path** in bold (use full path)
+   - Summary on the next line (indented)
+4. Keep it concise
+
+Example format:
+I found ${response.results.length} Python files related to your search.
+
+## 📁 Search Results
+
+1. **C:\\path\\to\\file.py**
+   Summary of what this file does...
+
+2. **C:\\path\\to\\another.py**
+   Summary of this file...`;
+
+          const summaryResponse = await fetch("http://127.0.0.1:8000/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: summaryPrompt, k: 0 }),
+          });
+
+          if (summaryResponse.ok) {
+            const summaryData = await summaryResponse.json();
+            aiSummary = summaryData.answer;
+          }
+        } catch (aiError) {
+          console.log("AI summary generation failed, using default message");
+          // Fallback to markdown formatted message
+          aiSummary = `I found **${response.results.length}** files matching "${query}".\n\n## 📁 Search Results\n\nHere are the most relevant results:`;
+        }
+
         const assistantMessage = {
           role: "assistant",
-          content: `Found ${response.results.length} files matching "${query}":`,
+          content: aiSummary || `Found ${response.results.length} files matching "${query}":`,
           files: response.results.map((r) => ({
             path: r.source,
             summary: r.summary,
@@ -111,9 +187,28 @@ function App() {
 
         setMessages((prev) => [...prev, assistantMessage]);
       } else {
+        // No results - provide helpful AI-generated suggestions
+        let noResultsMessage = "";
+        try {
+          const suggestionPrompt = `The user searched for "${query}" but no files were found. Suggest 2-3 alternative search terms or keywords they could try, or explain why their search might not have found results. Be helpful and concise.`;
+
+          const suggestionResponse = await fetch("http://127.0.0.1:8000/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: suggestionPrompt, k: 0 }),
+          });
+
+          if (suggestionResponse.ok) {
+            const suggestionData = await suggestionResponse.json();
+            noResultsMessage = suggestionData.answer;
+          }
+        } catch (aiError) {
+          noResultsMessage = "No files found matching your search. Try adding more folders to index or using different keywords.";
+        }
+
         const assistantMessage = {
           role: "assistant",
-          content: "No files found matching your search. Try adding more folders to index or using different keywords.",
+          content: noResultsMessage,
           type: "search",
         };
 
@@ -292,96 +387,120 @@ function App() {
         )}
       </header>
 
-      <div className="chat-container">
-        <div className="messages-area">
-          {messages.length === 0 ? (
-            <div className="welcome-state">
-              <div className="welcome-icon">🚀</div>
-              <h2>Welcome to FileGPT</h2>
-              <p>
-                Your AI-powered file assistant. Try these commands:
-              </p>
-              <div className="example-queries">
-                <div className="example-query">💬 Ask questions about your files</div>
-                <div className="example-query">🔍 Search: "Show me all Python files"</div>
-                <div className="example-query">📁 Organize: "Put all C++ sorting algorithms in a folder on the desktop"</div>
-              </div>
-            </div>
-          ) : (
-            messages.map((message, index) => (
-              <div key={index} className={`message ${message.role}`}>
-                <div className="message-avatar">
-                  {message.role === "user" ? "👤" : "🤖"}
-                </div>
-                <div className="message-content">
-                  <div className="message-text">{message.content}</div>
-
-                  {message.files && message.files.length > 0 && (
-                    <div className="file-results">
-                      {message.files.map((file, idx) => (
-                        <FileCard key={idx} file={file} />
-                      ))}
-                    </div>
-                  )}
-
-                  {message.type === "organize-plan" && message.plan && (
-                    <div className="plan-preview">
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => setOrganizationPlan(message.plan)}
-                      >
-                        📋 Review Organization Plan
-                      </button>
-                    </div>
-                  )}
-
-                  {message.error && (
-                    <div className="error-message">
-                      Make sure the backend is running: <code>python backend/start.py</code>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-
-          {isLoading && (
-            <div className="loading-message">
-              <div className="message-avatar">🤖</div>
-              <div className="loading-dots">
-                <div className="loading-dot"></div>
-                <div className="loading-dot"></div>
-                <div className="loading-dot"></div>
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        <div className="input-area">
-          <form onSubmit={handleSendMessage} className="input-container">
-            <div className="input-wrapper">
-              <textarea
-                className="query-input"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask about your files, search, or organize..."
-                rows="1"
-                disabled={isLoading || backendStatus === "offline"}
-              />
-            </div>
-            <button
-              type="submit"
-              className="send-button"
-              disabled={isLoading || !query.trim() || backendStatus === "offline"}
-            >
-              {isLoading ? "Sending..." : "Send 🚀"}
-            </button>
-          </form>
-        </div>
+      {/* View Toggle */}
+      <div className="view-toggle">
+        <button
+          className={`view-toggle-btn ${currentView === "chat" ? "active" : ""}`}
+          onClick={() => setCurrentView("chat")}
+        >
+          💬 Chat
+        </button>
+        <button
+          className={`view-toggle-btn ${currentView === "search" ? "active" : ""}`}
+          onClick={() => setCurrentView("search")}
+        >
+          🔍 Search
+        </button>
       </div>
+
+      {/* Conditional View Rendering */}
+      {currentView === "search" ? (
+        <SearchView />
+      ) : (
+        <div className="chat-container">
+          <div className="messages-area">
+            {messages.length === 0 ? (
+              <div className="welcome-state">
+                <div className="welcome-icon">🚀</div>
+                <h2>Welcome to FileGPT</h2>
+                <p>
+                  Your AI-powered file assistant with semantic search. Try these:
+                </p>
+                <div className="example-queries">
+                  <div className="example-query">� Semantic Search: "Find Python files about sorting"</div>
+                  <div className="example-query">� Ask Questions: "What files do I have about machine learning?"</div>
+                  <div className="example-query">📁 Organize: "Put all PDF documents in a folder"</div>
+                  <div className="example-query">🎯 Smart Search: "Locate all JavaScript code"</div>
+                </div>
+              </div>
+            ) : (
+              messages.map((message, index) => (
+                <div key={index} className={`message ${message.role}`}>
+                  <div className="message-avatar">
+                    {message.role === "user" ? "👤" : "🤖"}
+                  </div>
+                  <div className="message-content">
+                    <div className="message-text">
+                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                    </div>
+
+                    {message.files && message.files.length > 0 && (
+                      <div className="file-results">
+                        {message.files.map((file, idx) => (
+                          <FileCard key={idx} file={file} />
+                        ))}
+                      </div>
+                    )}
+
+                    {message.type === "organize-plan" && message.plan && (
+                      <div className="plan-preview">
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => setOrganizationPlan(message.plan)}
+                        >
+                          📋 Review Organization Plan
+                        </button>
+                      </div>
+                    )}
+
+                    {message.error && (
+                      <div className="error-message">
+                        Make sure the backend is running: <code>python backend/start.py</code>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+
+            {isLoading && (
+              <div className="loading-message">
+                <div className="message-avatar">🤖</div>
+                <div className="loading-dots">
+                  <div className="loading-dot"></div>
+                  <div className="loading-dot"></div>
+                  <div className="loading-dot"></div>
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          <div className="input-area">
+            <form onSubmit={handleSendMessage} className="input-container">
+              <div className="input-wrapper">
+                <textarea
+                  className="query-input"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask about your files, search, or organize..."
+                  rows="1"
+                  disabled={isLoading || backendStatus === "offline"}
+                />
+              </div>
+              <button
+                type="submit"
+                className="send-button"
+                disabled={isLoading || !query.trim() || backendStatus === "offline"}
+              >
+                {isLoading ? "Sending..." : "Send 🚀"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {organizationPlan && (
         <OrganizationApprovalModal
@@ -396,3 +515,4 @@ function App() {
 }
 
 export default App;
+
