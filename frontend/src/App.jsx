@@ -117,8 +117,8 @@ function App() {
 
   const handleSearch = async (query) => {
     try {
-      // Perform semantic search
-      const response = await apiClient.search(query, 10);
+      // Perform semantic search - limit to top 5 results
+      const response = await apiClient.search(query, 5);
 
       if (response.results && response.results.length > 0) {
         // Generate intelligent summary of search results using AI

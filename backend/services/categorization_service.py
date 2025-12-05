@@ -122,7 +122,7 @@ Response:"""
     
     try:
         response = ollama.chat(
-            model="llama3:8b",
+            model="qwen2.5:0.5b",
             messages=[
                 {
                     'role': 'user',
@@ -296,7 +296,7 @@ Categories:"""
     
     try:
         response = ollama.chat(
-            model="llama3:8b",
+            model="qwen2.5:0.5b",
             messages=[
                 {
                     'role': 'user',

@@ -10,7 +10,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
-from services import searchEngine, doclingDocumentParser
+from services import searchEngine, fileParser
 
 
 # Ignore patterns
@@ -62,7 +62,7 @@ class FileIndexHandler(FileSystemEventHandler):
             return False
         
         # Check if file type is supported
-        if not doclingDocumentParser.is_supported_file(file_path):
+        if not fileParser.is_supported_file(file_path):
             return False
         
         return True
@@ -243,7 +243,7 @@ def scan_directory(directory: str) -> int:
             file_path = os.path.join(root, filename)
             
             # Check if supported file type
-            if not doclingDocumentParser.is_supported_file(file_path):
+            if not fileParser.is_supported_file(file_path):
                 continue
             
             # Index the file

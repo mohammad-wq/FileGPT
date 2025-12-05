@@ -59,7 +59,7 @@ FileGPT is a complete RAG (Retrieval Augmented Generation) system that provides:
 
 ### Prerequisites
 - Python 3.10+
-- Ollama with a model (llama3.2:3b recommended)
+- Ollama with qwen2.5:0.5b model
 - ~4GB RAM minimum (2GB for model, 2GB for application)
 
 ### Quick Setup
@@ -70,7 +70,7 @@ ollama serve
 
 # In another terminal:
 # 2. Pull the model
-ollama pull llama3.2:3b
+ollama pull qwen2.5:0.5b
 
 # 3. Install dependencies
 cd C:\Users\Mohammad\Desktop\FileGPT\backend
@@ -259,7 +259,7 @@ CREATE TABLE files (
 
 ### Memory Usage
 - **Base**: ~300MB
-- **With Ollama**: +2GB for llama3.2:3b model
+- **With Ollama**: +500MB for qwen2.5:0.5b model
 - **Per Indexed File**: ~1-2MB average
 
 ### Example Timeline
@@ -427,7 +427,7 @@ EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'  # Or use other models
 ### Change LLM Model
 Edit `backend/services/summary_service.py`:
 ```python
-PRIMARY_MODEL = "llama3.2:3b"    # Change to your preferred model
+PRIMARY_MODEL = "qwen2.5:0.5b"    # Change to your preferred model
 ```
 
 ---
@@ -443,7 +443,7 @@ ollama serve
 ollama list
 
 # Pull required model
-ollama pull llama3.2:3b
+ollama pull qwen2.5:0.5b
 ```
 
 ### Issue: "Port 8000 already in use"

@@ -25,11 +25,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from services import (
     searchEngine, 
     metadata_db, 
-    file_watcher, 
-    index_manager,
+    file_watcher,
+    fileParser,
     router_service,
     summary_service,
-    doclingDocumentParser
+    background_worker,
+    session_service  # For conversation history
 )
 
 try:
@@ -37,6 +38,7 @@ try:
 except ImportError:
     categorization_service = None  # Optional service
 
+# Request schemas
 class SearchRequest(BaseModel):
     query: str
     k: Optional[int] = 5
@@ -44,6 +46,7 @@ class SearchRequest(BaseModel):
 class AskRequest(BaseModel):
     query: str
     k: Optional[int] = 5
+    session_id: Optional[str] = None  # For conversation history
 
 class AddFolderRequest(BaseModel):
     path: str
@@ -102,60 +105,55 @@ app.add_middleware(
 async def startup_event():
     """Initialize services on startup."""
     print("=" * 60)
-    print("FileGPT Backend Starting...")
+    print("FileGPT Backend - High-Performance Architecture")
     print("=" * 60)
     
-    # Initialize metadata database
+    # Initialize metadata database with WAL mode
     metadata_db.init_db()
-    print("✓ Metadata database initialized")
     
     # Initialize search indexes
     searchEngine.initialize_indexes()
-    print("✓ Search indexes loaded")
     
-    # Get index manager
-    idx_mgr = index_manager.get_index_manager()
+    # Start background worker for async embedding/summarization
+    from services import background_worker
+    background_worker.start_worker()
+    print("✓ Background worker started")
     
-    # Auto-index common user directories (PC-wide monitoring)
-    user_home = str(Path.home())
-    default_paths = [
-        os.path.join(user_home, "Documents"),
-        os.path.join(user_home, "Desktop"),
-        os.path.join(user_home, "Downloads"),
-    ]
+    # Use absolute path for testing (limited files for development)
+    test_path = r"C:\Users\Mohammad\Desktop\test"
     
-    print("\n📁 Initializing directory monitoring:")
+    print(f"\n📁 Test directory: {test_path}")
     
-    # Perform smart scan (full on first run, incremental on subsequent runs)
-    for path in default_paths:
-        if os.path.exists(path):
-            idx_mgr.smart_scan_directory(path)
+    # Create test directory if it doesn't exist
+    if not os.path.exists(test_path):
+        os.makedirs(test_path, exist_ok=True)
+        print(f"  Created test directory: {test_path}")
+        print(f"  Add test files (PDF, TXT, DOCX) to this directory")
     
-    # Clean up deleted files
-    idx_mgr.cleanup_deleted_files()
+    # Perform initial scan
+    if os.path.exists(test_path):
+        print(f"\n🔍 Scanning test directory...")
+        indexed_count = file_watcher.scan_directory(test_path)
+        print(f"✅ Indexed {indexed_count} files")
     
-    # Start file watcher in background thread for real-time updates
+    # Start file watcher for real-time updates
     def run_watcher():
         watcher = file_watcher.get_watcher()
-        # Add paths to watcher
-        for path in default_paths:
-            if os.path.exists(path):
-                watcher.add_path(path)
+        if os.path.exists(test_path):
+            watcher.add_path(test_path)
         watcher.start()
     
     watcher_thread = threading.Thread(target=run_watcher, daemon=True)
     watcher_thread.start()
-    print("✓ File watcher started")
-    
-    # Print watched paths
-    print("\n📁 Watching directories:")
-    for path in default_paths:
-        if os.path.exists(path):
-            print(f"  • {path}")
     
     print("\n" + "=" * 60)
     print("🚀 FileGPT Backend Ready!")
     print("=" * 60)
+    print(f"\nMonitoring: {test_path}")
+    stats = metadata_db.get_stats()
+    print(f"Database: {stats['total_files']} files, {stats['db_size_mb']:.2f} MB")
+    print(f"Queue: {stats['pending_embedding']} pending embedding, {stats['pending_summary']} pending summary")
+    print("=" * 60 + "\n")
 
 
 @app.get("/")
@@ -240,6 +238,18 @@ async def ask(request: AskRequest):
     Returns:
         AI-generated answer with source references and intent information
     """
+    # Session management for conversation history
+    session_mgr = session_service.get_session_manager()
+    
+    # Create new session if not provided
+    if not request.session_id:
+        session_id = session_mgr.create_session()
+    else:
+        session_id = request.session_id
+    
+    # Get conversation history
+    conversation_history = session_mgr.get_history(session_id)
+    
     # Route the query to determine intent
     route_result = router_service.route_query(request.query)
     intent = route_result.get("intent", "CHAT")
@@ -280,11 +290,50 @@ async def ask(request: AskRequest):
                 "relevance_score": result.get('score', 0)
             })
         
+        
         context = "\n".join(context_parts)
         
-        # Build prompt for LLM
+        # EXTRACTION MODE: For code queries, bypass LLM to avoid hallucination
+        code_keywords = ['code', 'function', 'implementation', 'algorithm', 'snippet', 'program', 'find', 'show']
+        is_code_query = any(keyword in request.query.lower() for keyword in code_keywords)
+        
+        print(f"DEBUG: is_code_query={is_code_query}")
+        
+        if is_code_query:
+            # Just return the actual code, no LLM generation
+            print("✓ Using extraction mode")
+            answer_parts = []
+            for i, result in enumerate(search_results, 1):
+                file_name = os.path.basename(result['source'])
+                answer_parts.append(f"**{i}. {file_name}**\n")
+                if result.get('summary'):
+                    answer_parts.append(f"*{result['summary']}*\n")  
+                answer_parts.append(f"```cpp\n{result['content']}\n```\n")
+            
+            answer = "\n".join(answer_parts)
+            
+            # Store in session
+            session_mgr.add_message(session_id, "user", request.query)
+            session_mgr.add_message(session_id, "assistant", answer)
+            
+            return {
+                "answer": answer,
+                "sources": sources,
+                "intent": "SEARCH",
+                "context_used": len(search_results),
+                "session_id": session_id
+            }
+        
+        # Build prompt for LLM with conversation history
+        history_context = ""
+        if conversation_history:
+            history_context = "\nPrevious conversation:\n"
+            for msg in conversation_history[-3:]:  # Last 3 exchanges for context
+                history_context += f"{msg['role'].title()}: {msg['content']}\n"
+            history_context += "\n"
+        
         prompt = f"""You are a helpful AI assistant with access to the user's files. Answer the following question based on the provided context from their indexed files.
-
+{history_context}
 Question: {search_query}
 
 Context from files:
@@ -292,7 +341,7 @@ Context from files:
 
 Instructions:
 1. Answer the question using information from the context
-2. Be specific and cite which files you're referencing
+2. Be specific and cite which files you're referencing  
 3. If the context doesn't contain enough information, say so
 4. Keep your answer concise and helpful
 
@@ -315,13 +364,19 @@ Answer:"""
                 }
             )
             
+            
             answer = response['message']['content'].strip()
+            
+            # Store conversation in session
+            session_mgr.add_message(session_id, "user", request.query)
+            session_mgr.add_message(session_id, "assistant", answer)
             
             return {
                 "answer": answer,
                 "sources": sources,
                 "intent": "SEARCH",
-                "context_used": len(search_results)
+                "context_used": len(search_results),
+                "session_id": session_id  # Return for frontend to track
             }
             
         except Exception as e:

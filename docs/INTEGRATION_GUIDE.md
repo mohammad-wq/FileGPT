@@ -57,7 +57,7 @@ Context:
 
 Answer using context, cite sources, be concise."""
         
-        response = ollama.chat(model="llama3.2:3b", messages=[{'role': 'user', 'content': prompt}], options={'temperature': 0.7, 'num_predict': 500})
+        response = ollama.chat(model="qwen2.5:0.5b", messages=[{'role': 'user', 'content': prompt}], options={'temperature': 0.7, 'num_predict': 500})
         return {"answer": response['message']['content'].strip(), "sources": sources, "context_used": len(search_results), "intent": intent}
     
     elif intent == "MULTI":
@@ -91,7 +91,7 @@ Answer this: {follow_up}
 
 Use file information, cite sources."""
             
-            response = ollama.chat(model="llama3.2:3b", messages=[{'role': 'user', 'content': prompt}], options={'temperature': 0.7, 'num_predict': 500})
+            response = ollama.chat(model="qwen2.5:0.5b", messages=[{'role': 'user', 'content': prompt}], options={'temperature': 0.7, 'num_predict': 500})
             return {"answer": response['message']['content'].strip(), "sources": sources, "context_used": len(search_results), "intent": intent, "multi_intent_details": {"primary": primary_intent, "follow_up": follow_up}}
         return {"answer": "Multi-step understood but couldn't complete.", "sources": [], "intent": intent}
     
@@ -102,7 +102,7 @@ Use file information, cite sources."""
         return {"answer": f"File operation:\nAction: {action}\nTarget: {target}\n{details}\n\nUse /create_folder, /move, /delete endpoints.", "sources": [], "intent": intent, "action_details": {"action": action, "target": target, "details": details}}
     
     else:  # CHAT
-        response = ollama.chat(model="llama3.2:3b", messages=[{'role': 'system', 'content': 'You are FileGPT. Be friendly and concise.'}, {'role': 'user', 'content': request.query}], options={'temperature': 0.8, 'num_predict': 300})
+        response = ollama.chat(model="qwen2.5:0.5b", messages=[{'role': 'system', 'content': 'You are FileGPT. Be friendly and concise.'}, {'role': 'user', 'content': request.query}], options={'temperature': 0.8, 'num_predict': 300})
         return {"answer": response['message']['content'].strip(), "sources": [], "intent": intent}
 ```
 

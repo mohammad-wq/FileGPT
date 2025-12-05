@@ -21,7 +21,7 @@
 ```bash
 # Install Ollama from: https://ollama.ai
 # Then pull the model:
-ollama pull llama3:8b
+ollama pull qwen2.5:0.5b
 ```
 
 ## 🚀 Quick Start

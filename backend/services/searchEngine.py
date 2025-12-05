@@ -18,7 +18,7 @@ from rank_bm25 import BM25Okapi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Local services
-from services import doclingDocumentParser, metadata_db, summary_service
+from services import fileParser, metadata_db, summary_service
 
 
 # Global state
@@ -114,7 +114,7 @@ def index_file_pipeline(file_path: str) -> bool:
     
     try:
         # Step 1: Parse file content
-        content = doclingDocumentParser.get_file_content(file_path)
+        content = fileParser.get_file_content(file_path)
         if not content:
             print(f"Skipping {file_path}: No content extracted")
             return False
@@ -288,17 +288,20 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
         except Exception as e:
             print(f"BM25 search error: {e}")
     
-    # Deduplicate and merge results
-    seen_content = set()
-    unique_results = []
+    # Deduplicate by file path (keep highest scoring chunk per file)
+    seen_files = {}
     
     for result in results:
-        content_key = (result['content'][:100], result['source'])  # Use first 100 chars + source as key
-        if content_key not in seen_content:
-            seen_content.add(content_key)
-            unique_results.append(result)
+        file_path = result['source']
+        if file_path not in seen_files:
+            seen_files[file_path] = result
+        else:
+            # Keep the result with higher score
+            if result['score'] > seen_files[file_path]['score']:
+                seen_files[file_path] = result
     
-    # Sort by score
+    # Convert back to list and sort by score
+    unique_results = list(seen_files.values())
     unique_results.sort(key=lambda x: x['score'], reverse=True)
     
     return unique_results[:k]

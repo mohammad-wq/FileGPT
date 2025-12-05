@@ -79,25 +79,39 @@ def route_query(user_query: str) -> dict:
     try:
         # Initialize Ollama with LangChain
         llm = ChatOllama(
-            model="llama3.2:3b",
+            model="qwen2.5:0.5b",
             temperature=0.1,
             num_predict=300,
         )
         
         # Enhanced system message that detects multi-intent
-        system_message = """You are an advanced intent classification system. Analyze queries and detect if they have SINGLE or MULTIPLE intents.
+        system_message = """You are an intent classification system. Classify user queries carefully.
+
+**IMPORTANT: Default to SEARCH when user asks about code, files, or content!**
 
 **Categories:**
 
-1. **SEARCH**: Finding files or asking about file content
-   - Simple: "Find Python files"
-   - With question: "Find expense.xlsx and tell me the total" (this is MULTI)
-
-2. **ACTION**: File operations
-   - Simple: "Create folder Data"
-   - With follow-up: "Move all PDFs and list them" (this is MULTI)
-
-3. **CHAT**: General conversation
+1. **SEARCH**: Finding files OR asking about file content
+   Examples:
+   - "find bubble sort code" → SEARCH
+   - "show me the bubble sort code" → SEARCH  
+   - "search for bubble sort" → SEARCH
+   - "do I have any Python files?" → SEARCH
+   - "what's in expense.xlsx?" → SEARCH
+   - "find my meeting notes" → SEARCH
+   - "show me config files" → SEARCH
+   
+2. **ACTION**: File operations (create, delete, move, rename)
+   Examples:
+   - "Create folder Data" → ACTION
+   - "Delete old files" → ACTION
+   - "Move PDFs to archive" → ACTION
+   
+3. **CHAT**: General questions NOT about user's files
+   Examples:
+   - "How does bubble sort work?" → CHAT (asking for explanation, not user's code)
+   - "What's the weather?" → CHAT
+   - "Hello" → CHAT
    - "Hi", "How are you?", "Explain quantum physics"
 
 4. **MULTI**: Compound queries combining search/action with a follow-up

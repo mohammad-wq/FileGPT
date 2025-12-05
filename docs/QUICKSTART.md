@@ -14,7 +14,7 @@
 # Download from https://ollama.ai
 
 # In a terminal, pull the model:
-ollama pull llama3.2:3b
+ollama pull qwen2.5:0.5b
 
 # Keep this terminal running or start Ollama in background
 ollama serve
@@ -314,7 +314,7 @@ ollama serve
 ollama list
 
 # Pull model if missing
-ollama pull llama3.2:3b
+ollama pull qwen2.5:0.5b
 ```
 
 **"Port 8000 already in use"**

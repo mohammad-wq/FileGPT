@@ -349,7 +349,7 @@ FileGPT/
 ### "Ollama connection failed"
 ```bash
 ollama serve
-ollama pull llama3.2:3b
+ollama pull qwen2.5:0.5b
 ```
 
 ### "Port 8000 in use"

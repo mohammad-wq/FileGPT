@@ -52,12 +52,34 @@ class APIClient {
 
     /**
      * Ask a question and get AI-generated answer with context
+     * Supports conversation history via session_id
      */
-    async ask(query, k = 5) {
+    async ask(query, k = 5, sessionId = null) {
+        const body = { query, k };
+        if (sessionId) {
+            body.session_id = sessionId;
+        }
+
         return this.request("/ask", {
             method: "POST",
-            body: JSON.stringify({ query, k }),
+            body: JSON.stringify(body),
         });
+    }
+
+    /**
+     * Clear conversation history for a session
+     */
+    async clearConversation(sessionId) {
+        return this.request(`/clear_conversation?session_id=${sessionId}`, {
+            method: "POST",
+        });
+    }
+
+    /**
+     * Get session statistics
+     */
+    async getSessionStats() {
+        return this.request("/session_stats");
     }
 
     /**

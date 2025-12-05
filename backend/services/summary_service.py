@@ -8,8 +8,8 @@ import ollama
 
 
 # Model configuration
-PRIMARY_MODEL = "qwen2.5:0.5b"  # Smaller model, only needs ~500MB RAM
-FALLBACK_MODEL = "llama3:8b"   # Larger model, better quality but needs ~5GB RAM
+PRIMARY_MODEL = "qwen2.5:0.5b"  # Only model available, needs ~500MB RAM
+FALLBACK_MODEL = "qwen2.5:0.5b"  # Same as primary since only one model is available
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 
@@ -28,9 +28,9 @@ def get_available_model() -> str:
         if PRIMARY_MODEL in model_names:
             return PRIMARY_MODEL
         
-        # Fall back to larger model
+        # Fall back to same model (only one model available)
         if FALLBACK_MODEL in model_names:
-            print(f"Note: Using fallback model {FALLBACK_MODEL} (llama3.2:3b not found)")
+            print(f"Note: Using fallback model {FALLBACK_MODEL}")
             return FALLBACK_MODEL
         
         # Default to primary even if not found (will error gracefully later)
