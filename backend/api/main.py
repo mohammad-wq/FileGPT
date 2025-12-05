@@ -365,7 +365,23 @@ Answer:"""
             )
             
             
+            
             answer = response['message']['content'].strip()
+            
+            # **FIX**: If LLM says "no files" but we have sources, override with extraction mode
+            no_result_phrases = ["couldn't find", "no relevant", "don't have", "no files", "no information"]
+            llm_says_no_results = any(phrase in answer.lower() for phrase in no_result_phrases)
+            
+            if llm_says_no_results and sources:
+                # LLM is wrong - we DO have results! Show them directly
+                print("⚠️  LLM said no results but we have sources - using extraction mode")
+                answer_parts = [f"Found {len(sources)} relevant files:\n\n"]
+                for i, src in enumerate(sources, 1):
+                    file_name = os.path.basename(src['path'])
+                    answer_parts.append(f"**{i}. {file_name}**\n")
+                    if src.get('summary'):
+                        answer_parts.append(f"*{src['summary']}*\n")
+                answer = "".join(answer_parts)
             
             # Store conversation in session
             session_mgr.add_message(session_id, "user", request.query)

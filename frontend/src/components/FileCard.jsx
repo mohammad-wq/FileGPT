@@ -43,10 +43,37 @@ export default function FileCard({ file, onClick }) {
     const handleOpenFile = async (e) => {
         e.stopPropagation();
         try {
-            await openUrl(file.path);
-            setShowActions(false);
+            // Try method 1: openUrl with file:// protocol
+            try {
+                await openUrl(`file:///${file.path.replace(/\\/g, '/')}`);
+                setShowActions(false);
+                return;
+            } catch (err) {
+                console.log("Method 1 failed, trying method 2...");
+            }
+
+            // Try method 2: Use Windows 'start' command
+            try {
+                const command = Command.create('cmd', ['/c', 'start', '', file.path]);
+                await command.execute();
+                setShowActions(false);
+                return;
+            } catch (err) {
+                console.log("Method 2 failed, trying method 3...");
+            }
+
+            // Try method 3: Direct shell open
+            try {
+                const command = Command.create('explorer', [file.path]);
+                await command.execute();
+                setShowActions(false);
+            } catch (err) {
+                console.error("All file opening methods failed:", err);
+                alert("Could not open file. Try 'Reveal in Explorer' instead.");
+            }
         } catch (error) {
             console.error("Error opening file:", error);
+            alert("Could not open file. Try 'Reveal in Explorer' instead.");
         }
     };
 
@@ -62,7 +89,7 @@ export default function FileCard({ file, onClick }) {
                     )}
                     {file.relevance_score !== undefined && (
                         <div className="file-card-score">
-                            Confidence: {Math.round(file.relevance_score * 100)}%
+                            Confidence: {Math.min(100, Math.round(file.relevance_score * 100))}%
                         </div>
                     )}
                 </div>
