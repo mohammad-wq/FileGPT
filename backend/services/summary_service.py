@@ -3,6 +3,7 @@ Summary Service for FileGPT
 Local LLM-powered file summarization using Ollama.
 """
 
+import os
 from typing import Optional
 import ollama
 
@@ -48,26 +49,21 @@ def generate_summary(content: str, file_path: str) -> str:
         file_path: Path to the file (for context)
         
     Returns:
-        Generated summary (2-3 sentences), or error message if generation fails
+        Generated summary (one sentence, <50 words), or error message if generation fails
     """
+    print(f"📝 Generating summary for {os.path.basename(file_path)}...")
+    
     # Truncate content to fit context window
     truncated_content = content[:MAX_CONTEXT_LENGTH]
     if len(content) > MAX_CONTEXT_LENGTH:
         truncated_content += "\n... (truncated)"
     
     # Build prompt
-    prompt = f"""You are a technical documentation assistant. Analyze the following file and provide a concise 2-3 sentence summary.
+    prompt = f"""Summarize in ONE brief sentence (MAX 20 words): {file_path}
 
-File Path: {file_path}
-
-Content:
 {truncated_content}
 
-Provide a summary that describes:
-1. What this file does or contains
-2. Key functionality or important information
-
-Summary:"""
+ONE sentence (20 words max):"""
     
     try:
         # Get available model
@@ -83,25 +79,36 @@ Summary:"""
                 }
             ],
             options={
-                'temperature': 0.3,  # Lower temperature for more focused summaries
-                'num_predict': 150,  # Limit output tokens
+                'temperature': 0.1,  # Lower temperature for more focused summaries
+                'num_predict': 30,  # Limit output tokens
             }
         )
         
         summary = response['message']['content'].strip()
         
+        # Remove "Summary:" prefix if LLM adds it
+        if summary.lower().startswith('summary:'):
+            summary = summary[8:].strip()
+        
         # Ensure we got a valid summary
         if not summary:
+            print(f"⚠️ Summary generation returned empty for {file_path}")
             return "Summary generation returned empty response."
         
+        # Truncate if still too long (safety check)
+        words = summary.split()
+        if len(words) > 50:
+            summary = ' '.join(words[:50]) + '...'
+        
+        print(f"✓ Generated summary for {os.path.basename(file_path)}: {len(words)} words")
         return summary
         
     except Exception as e:
         error_msg = str(e)
-        print(f"Warning: Summary generation failed for {file_path}: {error_msg[:100]}")
+        print(f"❌ Summary generation failed for {file_path}: {error_msg[:100]}")
         # Return a simple fallback summary based on file type
         file_ext = file_path.split('.')[-1].lower()
-        return f"[{file_ext.upper()} file - Summary unavailable due to insufficient memory]"
+        return f"[{file_ext.upper()} file - Summary unavailable]"
 
 
 def test_ollama_connection() -> bool:

@@ -29,23 +29,29 @@ except ImportError as e:
 # Check if Ollama is available
 print("Checking Ollama connection...")
 try:
-    models = ollama.list()
+    # Get the full list of models
+    models_response = ollama.list()
     print("[OK] Ollama is running")
     
-    # Check if qwen2.5:0.5b is installed
-    model_list = models.get('models', [])
-    has_qwen = any('qwen2.5:0.5b' in model.get('name', '') for model in model_list)
+    # Debugging: Print what Ollama actually sees
+    available_models = [m.get('model', m.get('name')) for m in models_response.get('models', [])]
+    print(f"DEBUG: Installed models: {available_models}")
+
+    # Check for qwen2.5:0.5b (flexible matching)
+    has_qwen = any('qwen2.5:0.5b' in str(name) for name in available_models)
     
     if has_qwen:
         print("✓ Found qwen2.5:0.5b - all LLM features ready (500MB RAM)")
     else:
-        print("\n[WARNING] qwen2.5:0.5b model not found")
-        print("   Install with: ollama pull qwen2.5:0.5b")
-        print("   The server will start but AI features will fail.\n")
+        print("\n[WARNING] qwen2.5:0.5b model not found in the list above.")
+        print("  Required: 'qwen2.5:0.5b'")
+        print("  Install with: ollama pull qwen2.5:0.5b")
+        print("  The server will start but AI features will fail.\n")
+
 except Exception as e:
     print(f"\n[WARNING] Could not connect to Ollama - {e}")
-    print("   Start Ollama: ollama serve")
-    print("   The server will start but AI features will fail.\n")
+    print("  Start Ollama: ollama serve")
+    print("  The server will start but AI features will fail.\n")
 
 
 print("\n" + "=" * 60)
