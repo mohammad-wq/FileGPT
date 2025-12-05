@@ -178,9 +178,12 @@ I found ${response.results.length} Python files related to your search.
           role: "assistant",
           content: aiSummary || `Found ${response.results.length} files matching "${query}":`,
           files: response.results.map((r) => ({
-            path: r.source,
-            summary: r.summary,
-            relevance_score: r.score,
+            path: r.path || r.source,
+            source: r.source || r.path,
+            content: r.content || '',
+            summary: r.summary || '',
+            relevance_score: r.score || r.relevance_score || 0,
+            processing_status: r.processing_status || 'unknown'
           })),
           type: "search",
         };
@@ -226,16 +229,20 @@ I found ${response.results.length} Python files related to your search.
     try {
       const response = await apiClient.ask(query, 5);
 
+      // Use consistent file mapping from either results or sources
+      const files = (response.results || response.sources || []).map((r) => ({
+        path: r.path || r.source,
+        source: r.source || r.path,
+        content: r.content || '',
+        summary: r.summary || '',
+        relevance_score: r.score || r.relevance_score || 0,
+        processing_status: r.processing_status || 'unknown'
+      }));
+
       const assistantMessage = {
         role: "assistant",
         content: response.answer,
-        files: response.sources
-          ? response.sources.map((s) => ({
-            path: s.path,
-            summary: s.summary,
-            relevance_score: s.relevance_score,
-          }))
-          : [],
+        files: files,
         type: "ask",
       };
 
@@ -381,7 +388,12 @@ I found ${response.results.length} Python files related to your search.
         {stats && (
           <div className="header-stats">
             <span className="stat-item">
-              📄 {stats.total_documents || 0} files indexed
+              📄 {(
+                (stats.db_stats && stats.db_stats.total_files) ||
+                stats.bm25_chunks ||
+                stats.chroma_chunks ||
+                0
+              )} files indexed
             </span>
           </div>
         )}

@@ -1,6 +1,258 @@
 /* Component Styles */
 
-/* File Card */
+/* Professional File Card - Cleaner, Less Cluttered */
+.file-card-professional {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    max-height: 500px;
+    transition: all 0.2s ease;
+    animation: fadeIn 0.3s ease-out;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.file-card-professional:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.12);
+}
+
+/* Header Section - Compact */
+.file-card-pro-header {
+    padding: 12px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.file-card-pro-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.file-card-pro-icon {
+    font-size: 28px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+
+.file-card-pro-header-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.file-card-pro-name {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.confidence-badge {
+    background: linear-gradient(135deg, var(--accent-primary), #7c3aed);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+    min-width: 48px;
+    text-align: center;
+}
+
+/* Path Bar - Subtle */
+.file-card-pro-path-bar {
+    padding: 0 14px 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.path-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.file-card-pro-path {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'Courier New', monospace;
+}
+
+/* Content Wrapper - Minimal spacing */
+.file-card-pro-content-wrapper {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    min-height: 0;
+}
+
+.file-card-pro-content-wrapper::-webkit-scrollbar {
+    width: 5px;
+}
+
+.file-card-pro-content-wrapper::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.file-card-pro-content-wrapper::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.file-card-pro-content-wrapper::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+/* Summary Section - Compact */
+.file-card-pro-summary-section {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.file-card-pro-summary {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Content Section - Full scroll */
+.file-card-pro-content-section {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.file-card-pro-content-scroll {
+    height: 100%;
+    overflow-y: auto;
+    background: var(--bg-primary);
+}
+
+.file-card-pro-content-scroll::-webkit-scrollbar {
+    width: 5px;
+}
+
+.file-card-pro-content-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.file-card-pro-content-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.file-card-pro-content-code {
+    margin: 0;
+    padding: 12px 14px;
+    font-family: 'Courier New', 'Consolas', monospace;
+    font-size: 11px;
+    color: var(--text-primary);
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    text-align: left;
+}
+
+/* Status Section - Minimal */
+.file-card-pro-status-section {
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #3b82f6;
+    font-weight: 500;
+    border-top: 1px solid var(--border-color);
+}
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    background: #3b82f6;
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+    flex-shrink: 0;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Footer with Action Buttons - Compact */
+.file-card-pro-footer {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-primary);
+}
+
+.file-action-btn {
+    flex: 1;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.file-action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.file-action-btn-primary {
+    background: linear-gradient(135deg, var(--accent-primary), #7c3aed);
+    color: white;
+}
+
+.file-action-btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+}
+
+.file-action-btn-secondary {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.file-action-btn-secondary:hover:not(:disabled) {
+    border-color: var(--accent-primary);
+    background: rgba(99, 102, 241, 0.05);
+}
+
+/* Legacy File Card (kept for backward compatibility) */
 .file-card {
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);

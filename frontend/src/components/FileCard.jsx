@@ -4,69 +4,56 @@ import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 /**
- * FileCard Component
- * Displays a single file result with icon, name, path, and summary
- * Clickable to show actions: Open File or Reveal in Explorer
+ * FileCard Component - Professional Search Result Display
+ * Displays file with scrollable content, summary, confidence score, and inline action buttons
  */
 export default function FileCard({ file, onClick }) {
     const [showActions, setShowActions] = useState(false);
-
-    const handleClick = () => {
-        if (onClick) {
-            onClick(file);
-        } else {
-            setShowActions(true);
-        }
-    };
+    const [isOpening, setIsOpening] = useState(false);
 
     const handleRevealInExplorer = async (e) => {
         e.stopPropagation();
+        setIsOpening(true);
         try {
-            // Use explorer.exe /select to open Explorer and select the file
             const command = Command.create('explorer', ['/select,', file.path]);
             await command.execute();
-            setShowActions(false);
         } catch (error) {
             console.error("Error opening file location:", error);
-            // Fallback: try to just open the folder containing the file
             try {
                 const folderPath = file.path.substring(0, file.path.lastIndexOf('\\'));
                 const command = Command.create('explorer', [folderPath]);
                 await command.execute();
-                setShowActions(false);
             } catch (fallbackError) {
                 console.error("Fallback error:", fallbackError);
+                alert("Could not open file location.");
             }
+        } finally {
+            setIsOpening(false);
         }
     };
 
     const handleOpenFile = async (e) => {
         e.stopPropagation();
+        setIsOpening(true);
         try {
-            // Try method 1: openUrl with file:// protocol
             try {
                 await openUrl(`file:///${file.path.replace(/\\/g, '/')}`);
-                setShowActions(false);
                 return;
             } catch (err) {
                 console.log("Method 1 failed, trying method 2...");
             }
 
-            // Try method 2: Use Windows 'start' command
             try {
                 const command = Command.create('cmd', ['/c', 'start', '', file.path]);
                 await command.execute();
-                setShowActions(false);
                 return;
             } catch (err) {
                 console.log("Method 2 failed, trying method 3...");
             }
 
-            // Try method 3: Direct shell open
             try {
                 const command = Command.create('explorer', [file.path]);
                 await command.execute();
-                setShowActions(false);
             } catch (err) {
                 console.error("All file opening methods failed:", err);
                 alert("Could not open file. Try 'Reveal in Explorer' instead.");
@@ -74,24 +61,87 @@ export default function FileCard({ file, onClick }) {
         } catch (error) {
             console.error("Error opening file:", error);
             alert("Could not open file. Try 'Reveal in Explorer' instead.");
+        } finally {
+            setIsOpening(false);
         }
     };
 
+    const confidencePercent = file.relevance_score !== undefined 
+        ? Math.min(100, Math.round(file.relevance_score * 100))
+        : 0;
+
+    const processingStatus = file.processing_status || 'unknown';
+    const isPending = processingStatus === 'pending_summary' || processingStatus === 'pending_embedding';
+
     return (
         <>
-            <div className="file-card" onClick={handleClick} title={file.path}>
-                <span className="file-card-icon">{getFileIcon(file.path)}</span>
-                <div className="file-card-info">
-                    <div className="file-card-name">{getFileName(file.path)}</div>
-                    <div className="file-card-path">{file.path}</div>
-                    {file.summary && (
-                        <div className="file-card-summary">{file.summary}</div>
-                    )}
+            <div className="file-card-professional">
+                {/* Compact Header - Icon + Name + Badge */}
+                <div className="file-card-pro-header">
+                    <div className="file-card-pro-header-left">
+                        <span className="file-card-pro-icon">{getFileIcon(file.path)}</span>
+                        <div className="file-card-pro-header-text">
+                            <div className="file-card-pro-name">{getFileName(file.path)}</div>
+                        </div>
+                    </div>
+                    
+                    {/* Confidence Badge */}
                     {file.relevance_score !== undefined && (
-                        <div className="file-card-score">
-                            Confidence: {Math.min(100, Math.round(file.relevance_score * 100))}%
+                        <div className="confidence-badge">{confidencePercent}%</div>
+                    )}
+                </div>
+
+                {/* Path - Subtle secondary info */}
+                <div className="file-card-pro-path-bar">
+                    <span className="path-icon">📍</span>
+                    <span className="file-card-pro-path" title={file.path}>{file.path}</span>
+                </div>
+
+                {/* Content Area with Scrollable Content */}
+                <div className="file-card-pro-content-wrapper">
+                    {/* Summary Section */}
+                    {file.summary && !file.summary.toLowerCase().includes('pending') && (
+                        <div className="file-card-pro-summary-section">
+                            <div className="file-card-pro-summary">{file.summary}</div>
                         </div>
                     )}
+
+                    {/* Content Section - Scrollable */}
+                    {file.content && (
+                        <div className="file-card-pro-content-section">
+                            <div className="file-card-pro-content-scroll">
+                                <pre className="file-card-pro-content-code">{file.content}</pre>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Status Section */}
+                    {isPending && (
+                        <div className="file-card-pro-status-section">
+                            <span className="status-dot"></span>
+                            <span>Processing summary...</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer with Action Buttons */}
+                <div className="file-card-pro-footer">
+                    <button
+                        className="file-action-btn file-action-btn-primary"
+                        onClick={handleOpenFile}
+                        disabled={isOpening}
+                        title="Open file"
+                    >
+                        <span>📄 Open</span>
+                    </button>
+                    <button
+                        className="file-action-btn file-action-btn-secondary"
+                        onClick={handleRevealInExplorer}
+                        disabled={isOpening}
+                        title="Show in Folder"
+                    >
+                        <span>📁 Folder</span>
+                    </button>
                 </div>
             </div>
 

@@ -284,10 +284,15 @@ async def ask(request: AskRequest):
             context_parts.append(f"Content: {result['content']}")
             context_parts.append("")
             
+            # Format consistently with /search endpoint
             sources.append({
+                "source": result['source'],
                 "path": result['source'],
+                "content": result.get('content', ''),
                 "summary": result.get('summary', ''),
-                "relevance_score": result.get('score', 0)
+                "score": result.get('score', 0),
+                "relevance_score": result.get('score', 0),  # Backward compat
+                "processing_status": result.get('processing_status', 'unknown')
             })
         
         
@@ -318,7 +323,10 @@ async def ask(request: AskRequest):
             
             return {
                 "answer": answer,
-                "sources": sources,
+                "results": search_results,  # Return full search results like /search does
+                "sources": sources,  # Backward compatibility
+                "query": request.query,
+                "count": len(search_results),
                 "intent": "SEARCH",
                 "context_used": len(search_results),
                 "session_id": session_id

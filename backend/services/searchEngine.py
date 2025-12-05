@@ -18,7 +18,7 @@ from rank_bm25 import BM25Okapi
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Local services
-from services import fileParser, metadata_db, summary_service
+from services import fileParser, metadata_db, summary_service, background_worker
 
 
 def _resolve_summary_for_file(file_path: str, current_summary: str) -> str:
@@ -206,8 +206,14 @@ def index_file_pipeline(file_path: str) -> bool:
             print(f"No chunks created for {file_path}")
             return False
         
-        # Step 4: Delete old BM25 entries and add new chunks (fast keyword index)
-        
+        # Step 4: Prepare BM25 metadata for this file's chunks (fast keyword index)
+        try:
+            existing_summary = metadata_db.get_summary(file_path) or ''
+        except Exception:
+            existing_summary = ''
+
+        metadatas = [{"source": file_path, "summary": existing_summary, "chunk_index": i} for i in range(len(chunks))]
+
         # Step 5: Update BM25 index (Keyword)
         # Remove old chunks for this file from BM25
         indices_to_remove = [i for i, meta in enumerate(_bm25_metadata) if meta.get('source') == file_path]
@@ -355,6 +361,14 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
         except Exception:
             # If something goes wrong, leave summary as-is
             pass
+
+    # Attach processing status from metadata DB so frontend can show pending/completed
+    for res in unique_results:
+        try:
+            md = metadata_db.get_metadata(res.get('source', ''))
+            res['processing_status'] = md.get('processing_status') if md else 'unknown'
+        except Exception:
+            res['processing_status'] = 'unknown'
 
     return unique_results[:k]
 
