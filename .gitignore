@@ -16,6 +16,7 @@ build/
 env/
 ENV/
 venv.bak/
+virtualenv/
 
 # Database files
 *.db
@@ -37,10 +38,17 @@ index_state.json
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.tox/
+.dmypy.json
+dmypy.json
 
 # IDE
 .vscode/
 .idea/
+.vs/
+.eclipse/
+.settings/
 *.swp
 *.swo
 *~
@@ -55,20 +63,32 @@ yarn-error.log*
 dist/
 dist-ssr/
 *.local
+.next/
+.nuxt/
+out/
 
 # Build outputs
 build/
 *.spec
+*.whl
+*.manifest
+target/
 
 # Environment variables
 .env
 .env.local
 .env.*.local
+*.env
 
 # OS files
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
 desktop.ini
+$RECYCLE.BIN/
 
 # Logs
 *.log
@@ -81,6 +101,7 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+*.bak
 
 # Development/debugging files
 fix_startup.py
@@ -97,3 +118,37 @@ backend/chroma_db/
 
 # ONNX model cache (can be large)
 *.onnx
+
+# Session management (in-memory, don't commit)
+session_data/
+sessions.json
+
+# Package lock files (optional - uncomment to ignore)  
+# package-lock.json
+# yarn.lock
+# poetry.lock
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Gemini artifacts
+.gemini/
+
+# Test coverage
+.coverage
+htmlcov/
+*.cover
+
+# Binary/compiled files
+*.exe
+*.dll
+*.dylib
+*.bin
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
