@@ -18,7 +18,7 @@ export default function FileCard({ file, onClick }) {
             const command = Command.create('explorer', ['/select,', file.path]);
             await command.execute();
         } catch (error) {
-            console.error("Error opening file location:", error);
+            console.error("Error revealing file:", error);
             try {
                 const folderPath = file.path.substring(0, file.path.lastIndexOf('\\'));
                 const command = Command.create('explorer', [folderPath]);
@@ -36,26 +36,23 @@ export default function FileCard({ file, onClick }) {
         e.stopPropagation();
         setIsOpening(true);
         try {
+            // Method 1: Try openUrl first (works for many file types)
             try {
                 await openUrl(`file:///${file.path.replace(/\\/g, '/')}`);
+                setIsOpening(false);
                 return;
             } catch (err) {
-                console.log("Method 1 failed, trying method 2...");
+                console.log("openUrl failed, trying cmd...");
             }
 
+            // Method 2: Use cmd to open file with default application
             try {
                 const command = Command.create('cmd', ['/c', 'start', '', file.path]);
                 await command.execute();
+                setIsOpening(false);
                 return;
             } catch (err) {
-                console.log("Method 2 failed, trying method 3...");
-            }
-
-            try {
-                const command = Command.create('explorer', [file.path]);
-                await command.execute();
-            } catch (err) {
-                console.error("All file opening methods failed:", err);
+                console.error("Failed to open file:", err);
                 alert("Could not open file. Try 'Reveal in Explorer' instead.");
             }
         } catch (error) {
@@ -66,7 +63,7 @@ export default function FileCard({ file, onClick }) {
         }
     };
 
-    const confidencePercent = file.relevance_score !== undefined 
+    const confidencePercent = file.relevance_score !== undefined
         ? Math.min(100, Math.round(file.relevance_score * 100))
         : 0;
 
@@ -84,7 +81,7 @@ export default function FileCard({ file, onClick }) {
                             <div className="file-card-pro-name">{getFileName(file.path)}</div>
                         </div>
                     </div>
-                    
+
                     {/* Confidence Badge */}
                     {file.relevance_score !== undefined && (
                         <div className="confidence-badge">{confidencePercent}%</div>
@@ -97,21 +94,12 @@ export default function FileCard({ file, onClick }) {
                     <span className="file-card-pro-path" title={file.path}>{file.path}</span>
                 </div>
 
-                {/* Content Area with Scrollable Content */}
+                {/* Content Area - Show only summary for cleaner look */}
                 <div className="file-card-pro-content-wrapper">
                     {/* Summary Section */}
                     {file.summary && !file.summary.toLowerCase().includes('pending') && (
                         <div className="file-card-pro-summary-section">
                             <div className="file-card-pro-summary">{file.summary}</div>
-                        </div>
-                    )}
-
-                    {/* Content Section - Scrollable */}
-                    {file.content && (
-                        <div className="file-card-pro-content-section">
-                            <div className="file-card-pro-content-scroll">
-                                <pre className="file-card-pro-content-code">{file.content}</pre>
-                            </div>
                         </div>
                     )}
 

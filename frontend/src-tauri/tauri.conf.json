@@ -9,12 +9,17 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
+  "plugins": {
+    "shell": {
+      "open": ".*"
+    }
+  },
   "app": {
     "windows": [
       {
-        "title": "frontend",
-        "width": 800,
-        "height": 600
+        "title": "FileGPT",
+        "width": 1200,
+        "height": 800
       }
     ],
     "security": {
@@ -31,8 +36,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-      "externalBin": [
-        "../binaries/filegpt_backend"
-      ]
+    "externalBin": [
+      "../binaries/filegpt_backend"
+    ]
   }
 }

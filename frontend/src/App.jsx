@@ -384,19 +384,17 @@ I found ${response.results.length} Python files related to your search.
             <span className="status-dot"></span>
             {backendStatus === "online" ? "Connected" : "Disconnected"}
           </div>
-        </div>
-        {stats && (
-          <div className="header-stats">
+          {stats && (
             <span className="stat-item">
               📄 {(
                 (stats.db_stats && stats.db_stats.total_files) ||
                 stats.bm25_chunks ||
                 stats.chroma_chunks ||
                 0
-              )} files indexed
+              )} indexed
             </span>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       {/* View Toggle */}
@@ -426,7 +424,7 @@ I found ${response.results.length} Python files related to your search.
                 <div className="welcome-icon">🚀</div>
                 <h2>Welcome to FileGPT</h2>
                 <p>
-                  Your AI-powered file assistant with semantic search. Try these:
+                  Your AI-powered file assistant with semantic search.
                 </p>
                 <div className="example-queries">
                   <div className="example-query">� Semantic Search: "Find Python files about sorting"</div>
