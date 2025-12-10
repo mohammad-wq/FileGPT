@@ -77,6 +77,24 @@ def route_query(user_query: str) -> dict:
     """
     
     try:
+        # Fast deterministic heuristic: if the user explicitly asks to find/show/search files or code,
+        # classify as SEARCH immediately to avoid LLM misclassification.
+        q_lower = user_query.strip().lower()
+        search_triggers = [
+            "find ", "find the ", "show ", "show me ", "search ", "search for ",
+            "where is ", "open ", "find file", "find code", "show code", "show file",
+            "do i have", "list files", "any .* files", "find my ", "find the file",
+        ]
+
+        # quick regex-ish checks for file extensions or code keywords
+        import re
+        if any(trigger in q_lower for trigger in search_triggers) or re.search(r"\\.(py|cpp|c|js|java|txt|md|docx|pdf)\\b", q_lower) or any(kw in q_lower for kw in ("code", "file", "files", "implement", "source")):
+            # Normalize query for search parameter
+            cleaned = re.sub(r"^(find|show|search) (the )?", "", q_lower).strip()
+            # fallback to full original if cleaned becomes empty
+            search_q = cleaned if cleaned else user_query
+            return {"intent": "SEARCH", "parameters": {"query": search_q}}
+
         # Initialize Ollama with LangChain
         llm = ChatOllama(
             model="qwen2.5:0.5b",

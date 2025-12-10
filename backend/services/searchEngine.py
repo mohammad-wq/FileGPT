@@ -295,17 +295,19 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
         List of result dictionaries with 'content', 'source', 'summary', 'score'
     """
     results = []
-    
+
+    # Preprocess query: remove generic words for BM25
+    generic_words = {"find", "search", "show", "get", "look", "for", "all", "the", "a", "an", "my"}
+    main_keywords = [w for w in query.lower().split() if w not in generic_words]
+    bm25_query = " ".join(main_keywords) if main_keywords else query
+
     # Semantic search with ChromaDB
     try:
-        # Generate query embedding manually
         query_embedding = _embedding_model.encode([query], show_progress_bar=False).tolist()
-        
         chroma_results = _chroma_collection.query(
-            query_embeddings=query_embedding,  # Pass embeddings instead of texts
+            query_embeddings=query_embedding,
             n_results=min(k, _chroma_collection.count())
         )
-        
         if chroma_results and chroma_results['documents'] and chroma_results['documents'][0]:
             for i, doc in enumerate(chroma_results['documents'][0]):
                 results.append({
@@ -317,23 +319,23 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
                 })
     except Exception as e:
         print(f"ChromaDB search error: {e}")
-    
-    # Keyword search with BM25
+
+    # Keyword search with BM25 (normalized)
     if _bm25_index and _bm25_corpus:
         try:
-            tokenized_query = query.lower().split()
+            tokenized_query = bm25_query.lower().split()
             bm25_scores = _bm25_index.get_scores(tokenized_query)
-            
-            # Get top k indices
-            top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:k]
-            
+            max_bm25 = max(bm25_scores) if bm25_scores else 1.0
+            # Normalize scores to 0-1
+            norm_bm25_scores = [score / max_bm25 if max_bm25 > 0 else 0 for score in bm25_scores]
+            top_indices = sorted(range(len(norm_bm25_scores)), key=lambda i: norm_bm25_scores[i], reverse=True)[:k]
             for idx in top_indices:
-                if bm25_scores[idx] > 0:  # Only include results with non-zero scores
+                if norm_bm25_scores[idx] > 0:
                     results.append({
                         'content': _bm25_corpus[idx],
                         'source': _bm25_metadata[idx]['source'],
                         'summary': _bm25_metadata[idx].get('summary', ''),
-                        'score': bm25_scores[idx],
+                        'score': norm_bm25_scores[idx],
                         'method': 'keyword'
                     })
         except Exception as e:
@@ -341,16 +343,20 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
     
     # Deduplicate by file path (keep highest scoring chunk per file)
     seen_files = {}
-    
     for result in results:
         file_path = result['source']
-        if file_path not in seen_files:
+        # Boost score if filename or summary matches main keyword
+        filename = os.path.basename(file_path).lower() if file_path else ""
+        summary = result.get('summary', '').lower()
+        boost = 0.0
+        for kw in main_keywords:
+            if kw in filename or kw in summary:
+                boost = max(boost, 0.3)  # Boost by 0.3 if match
+        score = result['score'] + boost
+        if file_path not in seen_files or score > seen_files[file_path]['score']:
+            result['score'] = score
             seen_files[file_path] = result
-        else:
-            # Keep the result with higher score
-            if result['score'] > seen_files[file_path]['score']:
-                seen_files[file_path] = result
-    
+
     # Convert back to list and sort by score
     unique_results = list(seen_files.values())
     unique_results.sort(key=lambda x: x['score'], reverse=True)
@@ -359,9 +365,7 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
         try:
             res['summary'] = _resolve_summary_for_file(res.get('source', ''), res.get('summary', ''))
         except Exception:
-            # If something goes wrong, leave summary as-is
             pass
-
     # Attach processing status from metadata DB so frontend can show pending/completed
     for res in unique_results:
         try:
@@ -369,7 +373,6 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
             res['processing_status'] = md.get('processing_status') if md else 'unknown'
         except Exception:
             res['processing_status'] = 'unknown'
-
     return unique_results[:k]
 
 

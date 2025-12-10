@@ -8,6 +8,7 @@ import OrganizationApprovalModal from "./components/OrganizationApprovalModal";
 import SearchView from "./components/SearchView";
 import ReactMarkdown from "react-markdown";
 import { parseDestinationPath, parseCategoryDescription } from "./utils/pathUtils";
+import { buildAssistantMessage } from "./utils/responseMapper";
 
 function App() {
   const [messages, setMessages] = useState([]);
@@ -18,6 +19,7 @@ function App() {
   const [organizationPlan, setOrganizationPlan] = useState(null);
   const [currentView, setCurrentView] = useState("chat"); // 'chat' or 'search'
   const messagesEndRef = useRef(null);
+    const [showAllFilesIdx, setShowAllFilesIdx] = useState(null); // Show more/less state for chat file results
 
   // Check backend status on mount
   useEffect(() => {
@@ -117,105 +119,50 @@ function App() {
 
   const handleSearch = async (query) => {
     try {
-      // Perform semantic search - limit to top 5 results
-      const response = await apiClient.search(query, 5);
+      // Perform semantic search - limit to top 8 results
+      const response = await apiClient.search(query, 8);
 
-      if (response.results && response.results.length > 0) {
-        // Generate intelligent summary of search results using AI
-        const topResults = response.results.slice(0, 5);
-        const contextParts = [];
+      // Normalize results into assistant message without calling LLM for formatting
+      const files = (response.results || response.sources || []).map((r) => ({
+        path: r.path || r.source || r.file_path || r.filePath || "",
+        source: r.source || r.path || r.file_path || r.filePath || "",
+        content: r.content || r.text || r.code || "",
+        summary: r.summary || r.description || "",
+        relevance_score: r.score || r.relevance_score || r.confidence || 0,
+        processing_status: r.processing_status || r.status || 'unknown',
+      }));
 
-        for (const result of topResults) {
-          contextParts.push(`File: ${result.source}`);
-          if (result.summary) {
-            contextParts.push(`Summary: ${result.summary}`);
+      if (files.length > 0) {
+        const assistantMessage = buildAssistantMessage({
+          answer: `I found ${files.length} files matching "${query}". Showing the most relevant files below.`,
+          results: files,
+        }, "search");
+
+        setMessages((prev) => {
+          if (prev && prev.length > 0) {
+            const last = prev[prev.length - 1];
+            if (last && last.type === 'search' && typeof last.content === 'string' && last.content.includes(`files matching "${query}"`)) {
+              // replace last search message instead of appending duplicate
+              return [...prev.slice(0, -1), assistantMessage];
+            }
           }
-        }
-
-        // Create AI response about the search results
-        let aiSummary = "";
-        try {
-          const summaryPrompt = `Based on the user's search for "${query}", I found ${response.results.length} files. Here are the top matches:
-
-${contextParts.join('\n')}
-
-Generate a response in MARKDOWN format with the following structure:
-1. Start with a brief introductory sentence
-2. Use "## 📁 Search Results" as a heading
-3. List each file as a numbered item with:
-   - **File path** in bold (use full path)
-   - Summary on the next line (indented)
-4. Keep it concise
-
-Example format:
-I found ${response.results.length} Python files related to your search.
-
-## 📁 Search Results
-
-1. **C:\\path\\to\\file.py**
-   Summary of what this file does...
-
-2. **C:\\path\\to\\another.py**
-   Summary of this file...`;
-
-          const summaryResponse = await fetch("http://127.0.0.1:8000/ask", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: summaryPrompt, k: 0 }),
-          });
-
-          if (summaryResponse.ok) {
-            const summaryData = await summaryResponse.json();
-            aiSummary = summaryData.answer;
-          }
-        } catch (aiError) {
-          console.log("AI summary generation failed, using default message");
-          // Fallback to markdown formatted message
-          aiSummary = `I found **${response.results.length}** files matching "${query}".\n\n## 📁 Search Results\n\nHere are the most relevant results:`;
-        }
-
-        const assistantMessage = {
-          role: "assistant",
-          content: aiSummary || `Found ${response.results.length} files matching "${query}":`,
-          files: response.results.map((r) => ({
-            path: r.path || r.source,
-            source: r.source || r.path,
-            content: r.content || '',
-            summary: r.summary || '',
-            relevance_score: r.score || r.relevance_score || 0,
-            processing_status: r.processing_status || 'unknown'
-          })),
-          type: "search",
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
+          return [...prev, assistantMessage];
+        });
       } else {
-        // No results - provide helpful AI-generated suggestions
-        let noResultsMessage = "";
-        try {
-          const suggestionPrompt = `The user searched for "${query}" but no files were found. Suggest 2-3 alternative search terms or keywords they could try, or explain why their search might not have found results. Be helpful and concise.`;
+        const assistantMessage = buildAssistantMessage({
+          answer: `No files found matching "${query}". Try different keywords or add folders to the index.`,
+          results: [],
+        }, "search");
 
-          const suggestionResponse = await fetch("http://127.0.0.1:8000/ask", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: suggestionPrompt, k: 0 }),
-          });
-
-          if (suggestionResponse.ok) {
-            const suggestionData = await suggestionResponse.json();
-            noResultsMessage = suggestionData.answer;
+        setMessages((prev) => {
+          if (prev && prev.length > 0) {
+            const last = prev[prev.length - 1];
+            if (last && last.type === 'search' && typeof last.content === 'string' && last.content.includes(`No files found matching "${query}"`)) {
+              return [...prev.slice(0, -1), assistantMessage];
+            }
           }
-        } catch (aiError) {
-          noResultsMessage = "No files found matching your search. Try adding more folders to index or using different keywords.";
-        }
-
-        const assistantMessage = {
-          role: "assistant",
-          content: noResultsMessage,
-          type: "search",
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
+          return [...prev, assistantMessage];
+        });
       }
     } catch (error) {
       throw error;
@@ -339,7 +286,7 @@ I found ${response.results.length} Python files related to your search.
     } catch (error) {
       const errorMessage = {
         role: "assistant",
-        content: "Sorry, I encountered an error. Please make sure the FileGPT backend is running.",
+        content: `Sorry, I encountered an error: ${error.message || "Unknown error"}. Please make sure the FileGPT backend is running.`,
         error: true,
       };
       setMessages((prev) => [...prev, errorMessage]);
@@ -395,6 +342,7 @@ I found ${response.results.length} Python files related to your search.
             </span>
           )}
         </div>
+        {/* Header search removed (use Chat or Search view) */}
       </header>
 
       {/* View Toggle */}
@@ -445,11 +393,30 @@ I found ${response.results.length} Python files related to your search.
                     </div>
 
                     {message.files && message.files.length > 0 && (
-                      <div className="file-results">
-                        {message.files.map((file, idx) => (
-                          <FileCard key={idx} file={file} />
-                        ))}
-                      </div>
+                        <div className="file-results">
+                          {(showAllFilesIdx === index
+                            ? message.files
+                            : message.files.slice(0, 5)
+                          ).map((file, idx) => (
+                            <FileCard key={idx} file={file} />
+                          ))}
+                          {message.files.length > 5 && showAllFilesIdx !== index && (
+                            <button
+                              className="search-show-more-btn"
+                              onClick={() => setShowAllFilesIdx(index)}
+                            >
+                              Show {message.files.length - 5} more results
+                            </button>
+                          )}
+                          {message.files.length > 5 && showAllFilesIdx === index && (
+                            <button
+                              className="search-show-more-btn"
+                              onClick={() => setShowAllFilesIdx(null)}
+                            >
+                              Show less
+                            </button>
+                          )}
+                        </div>
                     )}
 
                     {message.type === "organize-plan" && message.plan && (

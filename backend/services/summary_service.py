@@ -58,12 +58,46 @@ def generate_summary(content: str, file_path: str) -> str:
     if len(content) > MAX_CONTEXT_LENGTH:
         truncated_content += "\n... (truncated)"
     
-    # Build prompt
-    prompt = f"""Summarize in ONE brief sentence (MAX 20 words): {file_path}
+    # Detect file type and context for better summary
+    file_name = os.path.basename(file_path).lower()
+    file_ext = file_name.split('.')[-1] if '.' in file_name else ''
+    role_prefix = ""
+    if "resume" in file_name:
+        # Try to extract name from filename
+        name = ""
+        for part in file_name.replace('.pdf', '').replace('.docx', '').split('_'):
+            if part and part != "resume":
+                name = part.capitalize()
+                break
+        role_prefix = f"Resume for {name if name else 'user'}: "
+    elif file_ext in ["pdf", "docx", "txt"]:
+        role_prefix = f"{file_ext.upper()} document: "
+    elif file_ext in ["html", "htm"]:
+        role_prefix = "HTML file: "
+    elif file_ext in ["xlsx", "xls"]:
+        role_prefix = "Excel spreadsheet: "
+    elif file_ext in ["pptx", "ppt"]:
+        role_prefix = "PowerPoint presentation: "
+    else:
+        role_prefix = f"{file_ext.upper()} file: " if file_ext else "File: "
 
+    # Build a more detailed, generic system prompt for the LLM
+    prompt = f"""
+You are an expert file summarizer. Your job is to generate a clear, concise summary for any file type.
+
+Instructions:
+- Start by stating what type of file it is (e.g., Resume, PDF document, Python script, Spreadsheet, etc.).
+- If possible, mention the file's purpose or role (e.g., Resume for Mohammad, Invoice for client, Project report).
+- Then, briefly summarize the main contents or topics covered in the file.
+- Use one sentence, maximum 20 words. Be factual and avoid speculation.
+- Do not include file paths, metadata, or unnecessary details.
+
+File name: {file_name}
+File content:
 {truncated_content}
 
-ONE sentence (20 words max):"""
+Summary (one sentence, 20 words max):
+"""
     
     try:
         # Get available model
@@ -85,23 +119,20 @@ ONE sentence (20 words max):"""
         )
         
         summary = response['message']['content'].strip()
-        
         # Remove "Summary:" prefix if LLM adds it
         if summary.lower().startswith('summary:'):
             summary = summary[8:].strip()
-        
         # Ensure we got a valid summary
         if not summary:
             print(f"⚠️ Summary generation returned empty for {file_path}")
-            return "Summary generation returned empty response."
-        
+            return role_prefix + "Summary generation returned empty response."
         # Truncate if still too long (safety check)
         words = summary.split()
         if len(words) > 50:
             summary = ' '.join(words[:50]) + '...'
-        
         print(f"✓ Generated summary for {os.path.basename(file_path)}: {len(words)} words")
-        return summary
+        # Prepend role prefix for context-aware summary
+        return role_prefix + summary
         
     except Exception as e:
         error_msg = str(e)

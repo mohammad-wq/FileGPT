@@ -12,6 +12,7 @@ export default function SearchView() {
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState(null);
+  const [showAll, setShowAll] = useState(false);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -33,8 +34,10 @@ export default function SearchView() {
           relevance_score: r.score,
         }));
         setResults(mappedResults);
+        setShowAll(false);
       } else {
         setResults([]);
+        setShowAll(false);
       }
     } catch (err) {
       console.error("Search error:", err);
@@ -130,15 +133,26 @@ export default function SearchView() {
                   }}
                 >
                   Python files
-                </button>
-                <button
-                  className="example-chip"
-                  onClick={() => {
-                    setSearchQuery("documents about machine learning");
-                    setTimeout(() => document.querySelector('.search-button')?.click(), 100);
-                  }}
-                >
-                  Machine learning docs
+                {results.length > 0 ? (
+                  <div className="search-results">
+                    <div className="results-header">
+                      <h3>
+                        Found {results.length} {results.length === 1 ? "file" : "files"}
+                      </h3>
+                      <p className="results-query">Search: "{searchQuery}"</p>
+                    </div>
+                    <div className="results-grid">
+                      {results.map((file, index) => (
+                        <FileCard key={index} file={file} />
+                      ))}
+                    </div>
+                  </div>
+                ) : hasSearched && !isLoading ? (
+                  <div className="search-empty-state">
+                    <div className="search-empty-icon">🔎</div>
+                    <div className="search-empty-text">No files found. Try a different query.</div>
+                  </div>
+                ) : null}
                 </button>
                 <button
                   className="example-chip"
@@ -174,10 +188,24 @@ export default function SearchView() {
               <p className="results-query">Search: "{searchQuery}"</p>
             </div>
             <div className="results-grid">
-              {results.map((file, index) => (
+              {(showAll ? results : results.slice(0, 5)).map((file, index) => (
                 <FileCard key={index} file={file} />
               ))}
             </div>
+            {results.length > 5 && !showAll && (
+              <div className="search-show-more">
+                <button className="search-show-more-btn" onClick={() => setShowAll(true)}>
+                  Show {results.length - 5} more results
+                </button>
+              </div>
+            )}
+            {results.length > 5 && showAll && (
+              <div className="search-show-more">
+                <button className="search-show-more-btn" onClick={() => setShowAll(false)}>
+                  Show less
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

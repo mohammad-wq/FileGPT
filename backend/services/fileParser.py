@@ -75,11 +75,33 @@ def get_file_content(file_path: str) -> str | None:
     if not os.path.exists(file_path):
         print(f"File not found: {file_path}")
         return None
-    
+        
+    # OOM PROTECTION: Check file size before reading
     try:
+        file_size = os.path.getsize(file_path)
+        # Limits: 10MB for text/code, 50MB for PDFs/Docs (since they are compressed)
+        MAX_TEXT_SIZE = 10 * 1024 * 1024  # 10 MB
+        MAX_DOC_SIZE = 50 * 1024 * 1024   # 50 MB
+        
         _, extension = os.path.splitext(file_path)
         extension = extension.lower()
-
+        
+        # Stricter limit for plain text/code (read into memory directly)
+        if extension in {'.txt', '.md', '.py', '.js', '.json', '.xml', '.csv', '.log'}:
+            if file_size > MAX_TEXT_SIZE:
+                print(f"Skipping {file_path}: File too large ({file_size / 1024 / 1024:.2f} MB > 10 MB limit)")
+                return f"[Error: File too large to read directly ({file_size / 1024 / 1024:.2f} MB)]"
+                
+        # Higher limit for documents (parsed selectively)
+        if file_size > MAX_DOC_SIZE:
+             print(f"Skipping {file_path}: Document too large ({file_size / 1024 / 1024:.2f} MB > 50 MB limit)")
+             return f"[Error: Document too large to parse ({file_size / 1024 / 1024:.2f} MB)]"
+             
+    except Exception as e:
+        print(f"Error checking file size: {e}")
+        return None
+    
+    try:
         # Documents
         if extension == ".pdf":
             return _extract_pdf(file_path)

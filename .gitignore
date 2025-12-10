@@ -11,7 +11,7 @@ dist/
 build/
 *.pyc
 *.pyo
-
+docs/
 # Virtual environments
 env/
 ENV/

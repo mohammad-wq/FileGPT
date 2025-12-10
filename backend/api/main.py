@@ -17,6 +17,12 @@ import uvicorn
 import ollama
 import asyncio
 
+# Setup configuration and logging first
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from config import get_logger, SessionConfig
+
+logger = get_logger("main")
+
 # Add services to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'services'))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -30,8 +36,21 @@ from services import (
     router_service,
     summary_service,
     background_worker,
-    session_service  # For conversation history
+    session_service,
+    rag_workflow,
+    ollama_monitor,
+    rate_limiter,
+    agent_service  # NEW: ReAct agent service
 )
+
+# Import storage backends based on config
+if SessionConfig.STORAGE_MODE == "sqlite":
+    from services import session_storage
+    session_backend = session_storage
+    logger.info("Using SQLite session storage")
+else:
+    session_backend = session_service
+    logger.info("Using in-memory session storage")
 
 try:
     from services import categorization_service
@@ -92,6 +111,7 @@ app = FastAPI(
 )
 
 # CORS middleware - allow all origins for local development
+# NOTE: Add CORS first, then other middleware (order matters)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -100,41 +120,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add rate limiting middleware after CORS
+app.add_middleware(rate_limiter.RateLimitMiddleware)
+
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
-    print("=" * 60)
-    print("FileGPT Backend - High-Performance Architecture")
-    print("=" * 60)
-    
+    logger.info("FileGPT Backend - High-Performance Architecture")
+
     # Initialize metadata database with WAL mode
     metadata_db.init_db()
-    
+
     # Initialize search indexes
     searchEngine.initialize_indexes()
-    
+
     # Start background worker for async embedding/summarization
     from services import background_worker
     background_worker.start_worker()
-    print("✓ Background worker started")
+    logger.info("Background worker started")
+
+    # Start Ollama health monitor
+    ollama_monitor.start_health_checker()
+    logger.info("Ollama health monitor started")
+
+    # Start session cleanup scheduler if using SQLite
+    if SessionConfig.STORAGE_MODE == "sqlite":
+        from services import session_storage
+        session_storage.start_cleanup_scheduler()
+        logger.info("Session storage cleanup scheduler started")
     
     # Use absolute path for testing (limited files for development)
     test_path = r"C:\Users\Mohammad\Desktop\test"
     
-    print(f"\n📁 Test directory: {test_path}")
+    logger.info(f"Test directory: {test_path}")
     
     # Create test directory if it doesn't exist
     if not os.path.exists(test_path):
         os.makedirs(test_path, exist_ok=True)
-        print(f"  Created test directory: {test_path}")
-        print(f"  Add test files (PDF, TXT, DOCX) to this directory")
+        logger.info(f"  Created test directory: {test_path}")
+        logger.info(f"  Add test files (PDF, TXT, DOCX) to this directory")
     
     # Perform initial scan
     if os.path.exists(test_path):
-        print(f"\n🔍 Scanning test directory...")
+        logger.info("Scanning test directory...")
         indexed_count = file_watcher.scan_directory(test_path)
-        print(f"✅ Indexed {indexed_count} files")
+        logger.info(f"Indexed {indexed_count} files")
     
     # Start file watcher for real-time updates
     def run_watcher():
@@ -146,14 +177,14 @@ async def startup_event():
     watcher_thread = threading.Thread(target=run_watcher, daemon=True)
     watcher_thread.start()
     
-    print("\n" + "=" * 60)
-    print("🚀 FileGPT Backend Ready!")
-    print("=" * 60)
-    print(f"\nMonitoring: {test_path}")
+    logger.info("="*60)
+    logger.info("FileGPT Backend Ready")
+    logger.info("="*60)
+    logger.info(f"Monitoring: {test_path}")
     stats = metadata_db.get_stats()
-    print(f"Database: {stats['total_files']} files, {stats['db_size_mb']:.2f} MB")
-    print(f"Queue: {stats['pending_embedding']} pending embedding, {stats['pending_summary']} pending summary")
-    print("=" * 60 + "\n")
+    logger.info(f"Database: {stats['total_files']} files, {stats['db_size_mb']:.2f} MB")
+    logger.info(f"Queue: {stats['pending_embedding']} pending embedding, {stats['pending_summary']} pending summary")
+    logger.info("="*60)
 
 
 @app.get("/")
@@ -165,6 +196,30 @@ async def root():
         "service": "FileGPT Backend",
         "version": "1.0.0",
         "stats": stats
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """Detailed health check with dependency status."""
+    ollama_status = ollama_monitor.get_monitor().get_status()
+    
+    if SessionConfig.STORAGE_MODE == "sqlite":
+        session_stats = session_storage.get_persistent_storage().get_stats()
+    else:
+        session_stats = {"mode": "in-memory"}
+    
+    rate_limit_stats = rate_limiter.get_rate_limit_stats()
+    
+    return {
+        "status": "healthy",
+        "dependencies": {
+            "ollama": ollama_status,
+            "session_storage": session_stats,
+            "rate_limiting": rate_limit_stats,
+            "search_engine": searchEngine.get_index_stats()
+        },
+        "timestamp": __import__('time').time()
     }
 
 
@@ -217,7 +272,10 @@ async def search(request: SearchRequest):
     Returns:
         List of search results with content, source, and summary
     """
-    results = searchEngine.hybrid_search(request.query, k=request.k)
+    from starlette.concurrency import run_in_threadpool
+    
+    # Run heavy search operation in threadpool to avoid blocking main loop
+    results = await run_in_threadpool(searchEngine.hybrid_search, request.query, k=request.k)
     
     return {
         "query": request.query,
@@ -226,20 +284,40 @@ async def search(request: SearchRequest):
     }
 
 
+
+
 @app.post("/ask")
 async def ask(request: AskRequest):
     """
-    Ask a question and get AI-generated answer with context from indexed files.
-    Supports SEARCH, ACTION, and CHAT intents.
+    Ask a question and get AI-generated answer using ReAct Agent with LangGraph.
+    
+    The agent can:
+    - Search for files using hybrid RAG
+    - Read file contents
+    - List directory contents
+    - Move/rename files
+    - Have natural conversations
     
     Args:
         request: Contains question and optional k (number of context chunks)
         
     Returns:
-        AI-generated answer with source references and intent information
+        AI-generated answer with source references and tool usage information
     """
-    # Session management for conversation history
-    session_mgr = session_service.get_session_manager()
+    from starlette.concurrency import run_in_threadpool
+    
+    # Check Ollama availability
+    if not ollama_monitor.is_ollama_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama service is unavailable. Try again later."
+        )
+    
+    # Use session backend (SQLite or in-memory)
+    if SessionConfig.STORAGE_MODE == "sqlite":
+        session_mgr = session_storage.get_persistent_storage()
+    else:
+        session_mgr = session_service.get_session_manager()
     
     # Create new session if not provided
     if not request.session_id:
@@ -250,275 +328,130 @@ async def ask(request: AskRequest):
     # Get conversation history
     conversation_history = session_mgr.get_history(session_id)
     
-    # Route the query to determine intent
-    route_result = router_service.route_query(request.query)
-    intent = route_result.get("intent", "CHAT")
-    parameters = route_result.get("parameters", {})
-    
-    print(f"Intent detected: {intent}")
-    print(f"Parameters: {parameters}")
-    
-    # Handle SEARCH intent
-    if intent == "SEARCH":
-        search_query = parameters.get("query", request.query)
+    try:
+        # Run the Agent pipeline in threadpool to prevent blocking
+        logger.info(f"Processing query with agent: {request.query}")
         
-        # Get relevant context using hybrid search
-        search_results = searchEngine.hybrid_search(search_query, k=request.k)
+        result = await run_in_threadpool(
+            agent_service.run_agent_pipeline,
+            user_query=request.query,
+            session_history=conversation_history
+        )
         
-        if not search_results:
-            return {
-                "answer": "I couldn't find any relevant files to answer your question. Try adding more folders or indexing more files.",
-                "sources": [],
-                "intent": "SEARCH",
-                "context_used": 0
-            }
+        # Record Ollama success
+        ollama_monitor.record_ollama_success()
         
-        # Build context string from search results
-        context_parts = []
-        sources = []
+        # Extract answer and metadata
+        answer = result.get("answer", "")
+        tool_used = result.get("tool_used", "none")
+        sources = result.get("sources", [])
+        tool_calls = result.get("tool_calls", 0)
+        intent = result.get("intent", "AGENT")
         
-        for i, result in enumerate(search_results):
-            context_parts.append(f"--- Source {i+1}: {result['source']} ---")
-            if result.get('summary'):
-                context_parts.append(f"Summary: {result['summary']}")
-            context_parts.append(f"Content: {result['content']}")
-            context_parts.append("")
-            
-            # Format consistently with /search endpoint
-            sources.append({
-                "source": result['source'],
-                "path": result['source'],
-                "content": result.get('content', ''),
-                "summary": result.get('summary', ''),
-                "score": result.get('score', 0),
-                "relevance_score": result.get('score', 0),  # Backward compat
-                "processing_status": result.get('processing_status', 'unknown')
-            })
+        # Store conversation in session
+        session_mgr.add_message(session_id, "user", request.query)
+        session_mgr.add_message(session_id, "assistant", answer)
         
+        # Log agent activity
+        logger.info(f"Agent completed: tool_used={tool_used}, tool_calls={tool_calls}, intent={intent}")
         
-        context = "\n".join(context_parts)
+        # Return response with backward compatibility
+        return {
+            "answer": answer,
+            "sources": sources,
+            "intent": intent,
+            "tool_used": tool_used,
+            "tool_calls": tool_calls,
+            "context_used": len(sources),
+            "session_id": session_id,
+            "agent_type": "router_v1"  # Indicate this is the robust router
+        }
         
-        # EXTRACTION MODE: For code queries, bypass LLM to avoid hallucination
-        code_keywords = ['code', 'function', 'implementation', 'algorithm', 'snippet', 'program', 'find', 'show']
-        is_code_query = any(keyword in request.query.lower() for keyword in code_keywords)
+    except Exception as e:
+        logger.error(f"Error in agent pipeline: {e}", exc_info=True)
         
-        print(f"DEBUG: is_code_query={is_code_query}")
+        # Record Ollama failure
+        ollama_monitor.record_ollama_failure()
         
-        if is_code_query:
-            # Just return the actual code, no LLM generation
-            print("✓ Using extraction mode")
-            answer_parts = []
-            for i, result in enumerate(search_results, 1):
-                file_name = os.path.basename(result['source'])
-                answer_parts.append(f"**{i}. {file_name}**\n")
-                if result.get('summary'):
-                    answer_parts.append(f"*{result['summary']}*\n")  
-                answer_parts.append(f"```cpp\n{result['content']}\n```\n")
-            
-            answer = "\n".join(answer_parts)
-            
-            # Store in session
-            session_mgr.add_message(session_id, "user", request.query)
-            session_mgr.add_message(session_id, "assistant", answer)
-            
-            return {
-                "answer": answer,
-                "results": search_results,  # Return full search results like /search does
-                "sources": sources,  # Backward compatibility
-                "query": request.query,
-                "count": len(search_results),
-                "intent": "SEARCH",
-                "context_used": len(search_results),
-                "session_id": session_id
-            }
-        
-        # Build prompt for LLM with conversation history
-        history_context = ""
-        if conversation_history:
-            history_context = "\nPrevious conversation:\n"
-            for msg in conversation_history[-3:]:  # Last 3 exchanges for context
-                history_context += f"{msg['role'].title()}: {msg['content']}\n"
-            history_context += "\n"
-        
-        prompt = f"""You are a helpful AI assistant with access to the user's files. Answer the following question based on the provided context from their indexed files.
-{history_context}
-Question: {search_query}
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error processing query with agent: {str(e)}"
+        )
 
-Context from files:
-{context}
 
-Instructions:
-1. Answer the question using information from the context
-2. Be specific and cite which files you're referencing  
-3. If the context doesn't contain enough information, say so
-4. Keep your answer concise and helpful
-
-Answer:"""
-        
-        try:
-            # Call Ollama for answer generation
-            model_name = summary_service.get_available_model()
-            response = ollama.chat(
-                model=model_name,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt
-                    }
-                ],
-                options={
-                    'temperature': 0.7,
-                    'num_predict': 500,
-                }
-            )
-            
-            
-            
-            answer = response['message']['content'].strip()
-            
-            # **FIX**: If LLM says "no files" but we have sources, override with extraction mode
-            no_result_phrases = ["couldn't find", "no relevant", "don't have", "no files", "no information"]
-            llm_says_no_results = any(phrase in answer.lower() for phrase in no_result_phrases)
-            
-            if llm_says_no_results and sources:
-                # LLM is wrong - we DO have results! Show them directly
-                print("⚠️  LLM said no results but we have sources - using extraction mode")
-                answer_parts = [f"Found {len(sources)} relevant files:\n\n"]
-                for i, src in enumerate(sources, 1):
-                    file_name = os.path.basename(src['path'])
-                    answer_parts.append(f"**{i}. {file_name}**\n")
-                    if src.get('summary'):
-                        answer_parts.append(f"*{src['summary']}*\n")
-                answer = "".join(answer_parts)
-            
-            # Store conversation in session
-            session_mgr.add_message(session_id, "user", request.query)
-            session_mgr.add_message(session_id, "assistant", answer)
-            
-            return {
-                "answer": answer,
-                "sources": sources,
-                "intent": "SEARCH",
-                "context_used": len(search_results),
-                "session_id": session_id  # Return for frontend to track
-            }
-            
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+@app.post("/ask_rag")
+async def ask_rag(request: AskRequest):
+    """
+    Ask a question using Self-Correcting RAG with LangGraph.
+    Implements Retrieve → Grade → Decide → [Transform → Retrieve] → Generate loop.
     
-    # Handle ACTION intent
-    elif intent == "ACTION":
-        action = parameters.get("action", "unknown")
-        target = parameters.get("target", "")
-        details = parameters.get("details", "")
-        
-        try:
-            # ===== CREATE_FOLDER =====
-            if action == "create_folder":
-                folder_path = target
-                # Handle relative paths
-                if not os.path.isabs(folder_path):
-                    user_home = str(Path.home())
-                    folder_path = os.path.join(user_home, "Desktop", folder_path)
-                
-                os.makedirs(folder_path, exist_ok=True)
-                return {
-                    "answer": f"✅ Successfully created folder: {folder_path}",
-                    "sources": [],
-                    "intent": "ACTION",
-                    "action_executed": True,
-                    "path": folder_path
-                }
-            
-            # ===== DELETE (with safety check) =====
-            elif action == "delete":
-                if not os.path.exists(target):
-                    return {
-                        "answer": f"❌ Path not found: {target}",
-                        "intent": "ACTION",
-                        "action_executed": False
-                    }
-                
-                # SAFETY: Require confirmation for destructive operations
-                return {
-                    "answer": f"⚠️ Delete requested: {target}\n\nFor safety, please confirm using /delete endpoint or frontend.",
-                    "intent": "ACTION",
-                    "action_executed": False,
-                    "requires_confirmation": True,
-                    "delete_target": target
-                }
-            
-            # ===== ORGANIZE (AI-powered) =====
-            elif action == "organize":
-                return {
-                    "answer": f"📁 Organization request detected: '{target}'\n\nUse the frontend's AI organization workflow for approval and execution.",
-                    "intent": "ACTION",
-                    "action_executed": False,
-                    "suggestion": "use_frontend_organization",
-                    "organization_query": target
-                }
-            
-            # ===== MOVE/RENAME (require explicit parameters) =====
-            elif action in ["move", "rename"]:
-                return {
-                    "answer": f"I understood you want to {action} something.\n\nPlease use the /{action} endpoint with explicit source and destination for safety.",
-                    "intent": "ACTION",
-                    "action_executed": False
-                }
-            
-            # ===== UNKNOWN ACTION =====
-            else:
-                return {
-                    "answer": f"I understood '{action}' on '{target}' but this action isn't yet supported via chat.\n\nSupported: create_folder, organize\nUse dedicated endpoints for: move, delete, rename",
-                    "intent": "ACTION",
-                    "action_executed": False,
-                    "action_details": {"action": action, "target": target}
-                }
-                
-        except Exception as e:
-            return {
-                "answer": f"❌ Error executing {action}: {str(e)}",
-                "intent": "ACTION",
-                "action_executed": False,
-                "error": str(e)
-            }
+    This endpoint provides:
+    - Document relevance filtering (removes semantic drift)
+    - Automatic query rewriting when no relevant docs found
+    - LLM-based document grading for hallucination reduction
     
-    # Handle CHAT intent
+    Args:
+        request: Contains question and optional k (number of initial documents to retrieve)
+        
+    Returns:
+        AI-generated answer with sources, grading statistics, and workflow metrics
+    """
+    # Check Ollama availability
+    if not ollama_monitor.is_ollama_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama service is unavailable. Try again later."
+        )
+    
+    # Use session backend (SQLite or in-memory)
+    if SessionConfig.STORAGE_MODE == "sqlite":
+        session_mgr = session_storage.get_persistent_storage()
     else:
-        # General conversation without file context
-        prompt = f"""You are a helpful assistant. Answer the following question or respond to the message.
-
-User: {request.query}
-
-Respond helpfully and conversationally:"""
+        session_mgr = session_service.get_session_manager()
+    
+    # Create new session if not provided
+    if not request.session_id:
+        session_id = session_mgr.create_session()
+    else:
+        session_id = request.session_id
+    
+    try:
+        # Run Self-Correcting RAG workflow
+        rag_result = rag_workflow.run_rag_workflow_sync(
+            query=request.query,
+            k=request.k
+        )
         
-        try:
-            model_name = summary_service.get_available_model()
-            response = ollama.chat(
-                model=model_name,
-                messages=[
-                    {
-                        'role': 'user',
-                        'content': prompt
-                    }
-                ],
-                options={
-                    'temperature': 0.7,
-                    'num_predict': 500,
-                }
-            )
-            
-            answer = response['message']['content'].strip()
-            
-            return {
-                "answer": answer,
-                "sources": [],
-                "intent": "CHAT",
-                "context_used": 0
-            }
-            
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+        # Record success
+        ollama_monitor.record_ollama_success()
+        
+        # Store conversation in session
+        session_mgr.add_message(session_id, "user", request.query)
+        session_mgr.add_message(session_id, "assistant", rag_result["answer"])
+        
+        # Extract grading stats (stored inside generation_result)
+        grading_stats = rag_result.get("grading_stats", {
+            "retrieved": 0,
+            "graded": 0,
+            "attempts": 0
+        })
+        
+        # Return response with grading statistics
+        return {
+            "answer": rag_result.get("answer", ""),
+            "sources": rag_result.get("sources", []),
+            "results": rag_result.get("results", []),
+            "query": request.query,
+            "count": len(rag_result.get("sources", [])),
+            "session_id": session_id,
+            "grading_stats": grading_stats,
+            "workflow_status": "completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"RAG workflow error: {str(e)}", exc_info=True)
+        ollama_monitor.record_ollama_failure()
+        raise HTTPException(status_code=500, detail=f"RAG workflow error: {str(e)}")
 
 
 @app.post("/create_folder")
