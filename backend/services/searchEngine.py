@@ -4,6 +4,7 @@ Combines semantic (ChromaDB) and keyword (BM25) search with intelligent fusion.
 """
 
 import os
+import math
 import pickle
 from typing import List, Dict, Optional
 from pathlib import Path
@@ -283,13 +284,14 @@ def delete_file_from_index(file_path: str):
         print(f"Error deleting {file_path} from indexes: {e}")
 
 
-def hybrid_search(query: str, k: int = 5) -> List[Dict]:
+def hybrid_search(query: str, k: int = 5, min_score: float = 0.25) -> List[Dict]:
     """
     Hybrid search combining semantic (ChromaDB) and keyword (BM25) retrieval.
     
     Args:
         query: Search query
         k: Number of results to return from each method
+        min_score: Minimum relevance score threshold (0.0–1.0). Results below this are filtered out.
         
     Returns:
         List of result dictionaries with 'content', 'source', 'summary', 'score'
@@ -325,9 +327,12 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
         try:
             tokenized_query = bm25_query.lower().split()
             bm25_scores = _bm25_index.get_scores(tokenized_query)
-            max_bm25 = max(bm25_scores) if bm25_scores else 1.0
-            # Normalize scores to 0-1
-            norm_bm25_scores = [score / max_bm25 if max_bm25 > 0 else 0 for score in bm25_scores]
+            max_bm25 = max(bm25_scores) if len(bm25_scores) > 0 else 1.0
+            # Dampened BM25 normalization: avoids inflating low raw scores
+            norm_bm25_scores = [
+                min(1.0, math.log1p(score) / math.log1p(max_bm25)) if max_bm25 > 0 else 0
+                for score in bm25_scores
+            ]
             top_indices = sorted(range(len(norm_bm25_scores)), key=lambda i: norm_bm25_scores[i], reverse=True)[:k]
             for idx in top_indices:
                 if norm_bm25_scores[idx] > 0:
@@ -352,13 +357,13 @@ def hybrid_search(query: str, k: int = 5) -> List[Dict]:
         for kw in main_keywords:
             if kw in filename or kw in summary:
                 boost = max(boost, 0.3)  # Boost by 0.3 if match
-        score = result['score'] + boost
+        score = min(result['score'] + boost, 1.3)  # Cap at 1.3 to prevent excessive inflation
         if file_path not in seen_files or score > seen_files[file_path]['score']:
             result['score'] = score
             seen_files[file_path] = result
 
-    # Convert back to list and sort by score
-    unique_results = list(seen_files.values())
+    # Convert back to list, filter by min_score, and sort by score
+    unique_results = [r for r in seen_files.values() if r['score'] >= min_score]
     unique_results.sort(key=lambda x: x['score'], reverse=True)
     # Resolve summaries (check DB / generate if missing) to avoid returning placeholders
     for res in unique_results:

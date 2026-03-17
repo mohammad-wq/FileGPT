@@ -61,6 +61,7 @@ except ImportError:
 class SearchRequest(BaseModel):
     query: str
     k: Optional[int] = 5
+    min_score: Optional[float] = 0.25
 
 class AskRequest(BaseModel):
     query: str
@@ -151,7 +152,7 @@ async def startup_event():
         logger.info("Session storage cleanup scheduler started")
     
     # Use absolute path for testing (limited files for development)
-    test_path = r"C:\Users\Mohammad\Desktop\test"
+    test_path = os.path.expanduser("~/Downloads")
     
     logger.info(f"Test directory: {test_path}")
     
@@ -275,7 +276,7 @@ async def search(request: SearchRequest):
     from starlette.concurrency import run_in_threadpool
     
     # Run heavy search operation in threadpool to avoid blocking main loop
-    results = await run_in_threadpool(searchEngine.hybrid_search, request.query, k=request.k)
+    results = await run_in_threadpool(searchEngine.hybrid_search, request.query, k=request.k, min_score=request.min_score)
     
     return {
         "query": request.query,

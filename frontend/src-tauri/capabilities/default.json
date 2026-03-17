@@ -15,6 +15,21 @@
           "name": "explorer",
           "cmd": "explorer",
           "args": true
+        },
+        {
+          "name": "cmd",
+          "cmd": "cmd",
+          "args": true
+        },
+        {
+          "name": "xdg-open",
+          "cmd": "xdg-open",
+          "args": true
+        },
+        {
+          "name": "open",
+          "cmd": "open",
+          "args": true
         }
       ]
     }

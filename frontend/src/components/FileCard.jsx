@@ -22,18 +22,33 @@ export default function FileCard({ file, onClick }) {
         e.stopPropagation();
         setIsOpening(true);
         try {
-            const command = Command.create('explorer', ['/select,', file.path]);
-            await command.execute();
+            const platform = navigator.userAgent.toLowerCase();
+            const isLinux = platform.includes('linux');
+            const isMac = platform.includes('mac');
+
+            // Get parent folder
+            const separator = file.path.includes('/') ? '/' : '\\';
+            const folderPath = file.path.substring(0, file.path.lastIndexOf(separator));
+
+            if (isLinux) {
+                const command = Command.create('xdg-open', [folderPath]);
+                await command.execute();
+            } else if (isMac) {
+                const command = Command.create('open', ['-R', file.path]);
+                await command.execute();
+            } else {
+                // Windows
+                try {
+                    const command = Command.create('explorer', ['/select,', file.path]);
+                    await command.execute();
+                } catch {
+                    const command = Command.create('explorer', [folderPath]);
+                    await command.execute();
+                }
+            }
         } catch (error) {
             console.error("Error revealing file:", error);
-            try {
-                const folderPath = file.path.substring(0, file.path.lastIndexOf('\\'));
-                const command = Command.create('explorer', [folderPath]);
-                await command.execute();
-            } catch (fallbackError) {
-                console.error("Fallback error:", fallbackError);
-                alert("Could not open file location.");
-            }
+            alert("Could not open file location.");
         } finally {
             setIsOpening(false);
         }
@@ -43,28 +58,33 @@ export default function FileCard({ file, onClick }) {
         e.stopPropagation();
         setIsOpening(true);
         try {
-            // Method 1: Try openUrl first (works for many file types)
-            try {
-                await openUrl(`file:///${file.path.replace(/\\/g, '/')}`);
-                setIsOpening(false);
-                return;
-            } catch (err) {
-                console.log("openUrl failed, trying cmd...");
-            }
+            const platform = navigator.userAgent.toLowerCase();
+            const isLinux = platform.includes('linux');
+            const isMac = platform.includes('mac');
 
-            // Method 2: Use cmd to open file with default application
-            try {
-                const command = Command.create('cmd', ['/c', 'start', '', file.path]);
+            if (isLinux) {
+                const command = Command.create('xdg-open', [file.path]);
                 await command.execute();
-                setIsOpening(false);
-                return;
-            } catch (err) {
-                console.error("Failed to open file:", err);
-                alert("Could not open file. Try 'Reveal in Explorer' instead.");
+            } else if (isMac) {
+                const command = Command.create('open', [file.path]);
+                await command.execute();
+            } else {
+                // Windows: try openUrl first, then cmd fallback
+                try {
+                    await openUrl(`file:///${file.path.replace(/\\/g, '/')}`);
+                } catch {
+                    try {
+                        const command = Command.create('cmd', ['/c', 'start', '', file.path]);
+                        await command.execute();
+                    } catch (err) {
+                        console.error("Failed to open file:", err);
+                        alert("Could not open file.");
+                    }
+                }
             }
         } catch (error) {
             console.error("Error opening file:", error);
-            alert("Could not open file. Try 'Reveal in Explorer' instead.");
+            alert("Could not open file.");
         } finally {
             setIsOpening(false);
         }

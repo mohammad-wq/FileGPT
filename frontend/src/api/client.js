@@ -43,10 +43,10 @@ class APIClient {
     /**
      * Search for files using hybrid search (semantic + keyword)
      */
-    async search(query, k = 5) {
+    async search(query, k = 5, minScore = 0.25) {
         return this.request("/search", {
             method: "POST",
-            body: JSON.stringify({ query, k }),
+            body: JSON.stringify({ query, k, min_score: minScore }),
         });
     }
 

@@ -13,6 +13,7 @@ export default function SearchView() {
   const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState(null);
   const [showAll, setShowAll] = useState(false);
+  const [minScore, setMinScore] = useState(0.25);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -24,7 +25,7 @@ export default function SearchView() {
     setHasSearched(true);
 
     try {
-      const response = await apiClient.search(searchQuery.trim(), 20);
+      const response = await apiClient.search(searchQuery.trim(), 20, minScore);
       
       if (response.results && response.results.length > 0) {
         // Map results to match FileCard format
@@ -96,6 +97,28 @@ export default function SearchView() {
           </button>
         </div>
       </form>
+
+      {/* Relevance Threshold Slider */}
+      <div className="search-threshold-bar">
+        <div className="threshold-label-row">
+          <label htmlFor="threshold-slider">Relevance Threshold</label>
+          <span className="threshold-value">{Math.round(minScore * 100)}%</span>
+        </div>
+        <input
+          id="threshold-slider"
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value={minScore}
+          onChange={(e) => setMinScore(parseFloat(e.target.value))}
+          className="threshold-slider"
+        />
+        <div className="threshold-hints">
+          <span>Show All</span>
+          <span>Strict</span>
+        </div>
+      </div>
 
       {/* Results Area */}
       <div className="search-results-area">
