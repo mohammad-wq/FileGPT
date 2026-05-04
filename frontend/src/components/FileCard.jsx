@@ -37,7 +37,6 @@ export default function FileCard({ file, onClick }) {
                 const command = Command.create('open', ['-R', file.path]);
                 await command.execute();
             } else {
-                // Windows
                 try {
                     const command = Command.create('explorer', ['/select,', file.path]);
                     await command.execute();

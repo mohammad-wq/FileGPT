@@ -662,6 +662,72 @@ async def websocket_logs(websocket: WebSocket):
         broadcaster.unsubscribe(queue)
 
 
+# ============================================================================
+# RUST MONITOR INTEGRATION
+# ============================================================================
+
+class MonitorEventRequest(BaseModel):
+    event_type: str  # "create", "modify", "delete"
+    path: str
+    extension: Optional[str] = None
+    file_type: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+@app.post("/monitor/event")
+async def monitor_event(request: MonitorEventRequest):
+    """
+    Receive file change events from the Rust linux_monitor.
+    Triggers indexing or deletion in the search engine.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    logger.info(f"Monitor event: {request.event_type} -> {request.path}")
+
+    try:
+        if request.event_type in ("create", "modify"):
+            # Index or re-index the file
+            if os.path.exists(request.path) and os.path.isfile(request.path):
+                result = await run_in_threadpool(
+                    searchEngine.index_file_pipeline, request.path
+                )
+                return {
+                    "status": "indexed",
+                    "path": request.path,
+                    "event_type": request.event_type,
+                }
+            else:
+                return {
+                    "status": "skipped",
+                    "path": request.path,
+                    "reason": "File does not exist or is not a regular file",
+                }
+
+        elif request.event_type == "delete":
+            # Remove from index
+            await run_in_threadpool(
+                searchEngine.delete_file_from_index, request.path
+            )
+            return {
+                "status": "deleted",
+                "path": request.path,
+                "event_type": request.event_type,
+            }
+
+        else:
+            return {
+                "status": "ignored",
+                "path": request.path,
+                "event_type": request.event_type,
+            }
+
+    except Exception as e:
+        logger.error(f"Monitor event processing error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing monitor event: {str(e)}",
+        )
+
 
 # ============================================================================
 # AI CATEGORIZATION ENDPOINTS
