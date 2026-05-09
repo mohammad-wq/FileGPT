@@ -8,7 +8,6 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-
 use chrono::Local;
 use clap::Parser;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -22,7 +21,7 @@ use tokio::sync::mpsc;
 struct Args {
     /// Directories to watch (can specify multiple). If omitted, defaults to environment variable FILEGPT_WATCH_PATHS or root "/".
     #[arg(short, long, required = false, default_values_t = Vec::<String>::new())]
-    watch: Vec<String>,
+    watch: Vec<String>,1
 
     /// Backend URL to POST events to
     #[arg(short, long, default_value = "http://127.0.0.1:8000")]
@@ -136,6 +135,14 @@ static IGNORE_DIRS: &[&str] = &[
     "boot",
     "lost+found",
     "var",
+    "etc",
+    "usr",
+    "opt",
+    "lib",
+    "lib64",
+    "srv",
+    "mnt",
+    "media",
 ];
 
 /// Individual files to ignore

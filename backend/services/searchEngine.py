@@ -20,6 +20,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Local services
 from services import fileParser, metadata_db, summary_service, background_worker
+from config import get_logger
+
+logger = get_logger("search_engine")
 
 
 def _resolve_summary_for_file(file_path: str, current_summary: str) -> str:
@@ -112,7 +115,7 @@ def initialize_indexes():
     # Load BM25 index from disk if exists
     _load_bm25_index()
     
-    print(f"Search engine initialized. ChromaDB: {_chroma_collection.count()} chunks, BM25: {len(_bm25_corpus)} chunks")
+    logger.info(f"Search engine initialized. ChromaDB: {_chroma_collection.count()} chunks, BM25: {len(_bm25_corpus)} chunks")
 
 
 def _load_bm25_index():
@@ -130,9 +133,9 @@ def _load_bm25_index():
                 tokenized_corpus = [doc.lower().split() for doc in _bm25_corpus]
                 _bm25_index = BM25Okapi(tokenized_corpus)
                 
-                print(f"Loaded BM25 index with {len(_bm25_corpus)} documents")
+                logger.info(f"Loaded BM25 index with {len(_bm25_corpus)} documents")
         except Exception as e:
-            print(f"Error loading BM25 index: {e}. Starting fresh.")
+            logger.error(f"Error loading BM25 index: {e}. Starting fresh.")
             _bm25_corpus = []
             _bm25_metadata = []
             _bm25_index = None
@@ -151,7 +154,7 @@ def _save_bm25_index():
                 'metadata': _bm25_metadata
             }, f)
     except Exception as e:
-        print(f"Error saving BM25 index: {e}")
+        logger.error(f"Error saving BM25 index: {e}")
 
 
 def index_file_pipeline(file_path: str) -> bool:
@@ -170,15 +173,15 @@ def index_file_pipeline(file_path: str) -> bool:
         # Step 1: Parse file content
         content = fileParser.get_file_content(file_path)
         if not content:
-            print(f"Skipping {file_path}: No content extracted")
+            logger.warning(f"Skipping {file_path}: No content extracted")
             return False
         
         # Check if file needs reindexing
         if not metadata_db.file_needs_reindex(file_path, content):
-            print(f"Skipping {file_path}: Already indexed with same content")
+            logger.info(f"Skipping {file_path}: Already indexed with same content")
             return False
         
-        print(f"Indexing: {file_path}")
+        logger.info(f"Indexing: {file_path}")
 
         # Step 2: Store file content in metadata DB and mark for background embedding
         # Use store_file_content to avoid generating summary synchronously and
@@ -192,7 +195,7 @@ def index_file_pipeline(file_path: str) -> bool:
                 metadata_db.store_file_content(file_path, content, metadata_db.calculate_hash(content))
         except Exception:
             # Best-effort: if storing fails, continue but warn
-            print(f"Warning: could not store content for {file_path} in metadata DB")
+            logger.warning(f"Warning: could not store content for {file_path} in metadata DB")
 
         # Step 3: Chunk the content
         splitter = RecursiveCharacterTextSplitter(
@@ -204,7 +207,7 @@ def index_file_pipeline(file_path: str) -> bool:
         chunks = splitter.split_text(content)
         
         if not chunks:
-            print(f"No chunks created for {file_path}")
+            logger.warning(f"No chunks created for {file_path}")
             return False
         
         # Step 4: Prepare BM25 metadata for this file's chunks (fast keyword index)
@@ -237,13 +240,13 @@ def index_file_pipeline(file_path: str) -> bool:
             bg = background_worker.get_background_worker()
             bg.add_to_embedding_queue(file_path, chunks)
         except Exception as e:
-            print(f"Warning: could not enqueue embedding job for {file_path}: {e}")
+            logger.warning(f"Warning: could not enqueue embedding job for {file_path}: {e}")
 
-        print(f"✓ Indexed (metadata+bm25) {file_path}: {len(chunks)} chunks (embedding queued)")
+        logger.info(f"✓ Indexed (metadata+bm25) {file_path}: {len(chunks)} chunks (embedding queued)")
         return True
         
     except Exception as e:
-        print(f"Error indexing {file_path}: {e}")
+        logger.error(f"Error indexing {file_path}: {e}")
         return False
 
 
@@ -278,10 +281,10 @@ def delete_file_from_index(file_path: str):
         # Remove from metadata DB
         metadata_db.delete_metadata(file_path)
         
-        print(f"Deleted {file_path} from indexes")
+        logger.info(f"Deleted {file_path} from indexes")
         
     except Exception as e:
-        print(f"Error deleting {file_path} from indexes: {e}")
+        logger.error(f"Error deleting {file_path} from indexes: {e}")
 
 
 def hybrid_search(query: str, k: int = 5, min_score: float = 0.25) -> List[Dict]:
@@ -303,81 +306,104 @@ def hybrid_search(query: str, k: int = 5, min_score: float = 0.25) -> List[Dict]
     main_keywords = [w for w in query.lower().split() if w not in generic_words]
     bm25_query = " ".join(main_keywords) if main_keywords else query
 
-    # Semantic search with ChromaDB
+    # 1. Semantic search with ChromaDB
+    chroma_hits = []
     try:
         query_embedding = _embedding_model.encode([query], show_progress_bar=False).tolist()
         chroma_results = _chroma_collection.query(
             query_embeddings=query_embedding,
-            n_results=min(k, _chroma_collection.count())
+            n_results=min(k * 2, _chroma_collection.count()) # Get more for better fusion
         )
         if chroma_results and chroma_results['documents'] and chroma_results['documents'][0]:
             for i, doc in enumerate(chroma_results['documents'][0]):
-                results.append({
+                chroma_hits.append({
                     'content': doc,
                     'source': chroma_results['metadatas'][0][i]['source'],
                     'summary': chroma_results['metadatas'][0][i].get('summary', ''),
                     'score': 1.0 - chroma_results['distances'][0][i] if chroma_results['distances'] else 0.5,
-                    'method': 'semantic'
                 })
     except Exception as e:
-        print(f"ChromaDB search error: {e}")
+        logger.error(f"ChromaDB search error: {e}")
 
-    # Keyword search with BM25 (normalized)
+    # 2. Keyword search with BM25
+    bm25_hits = []
     if _bm25_index and _bm25_corpus:
         try:
             tokenized_query = bm25_query.lower().split()
             bm25_scores = _bm25_index.get_scores(tokenized_query)
-            max_bm25 = max(bm25_scores) if len(bm25_scores) > 0 else 1.0
-            # Dampened BM25 normalization: avoids inflating low raw scores
-            norm_bm25_scores = [
-                min(1.0, math.log1p(score) / math.log1p(max_bm25)) if max_bm25 > 0 else 0
-                for score in bm25_scores
-            ]
-            top_indices = sorted(range(len(norm_bm25_scores)), key=lambda i: norm_bm25_scores[i], reverse=True)[:k]
-            for idx in top_indices:
-                if norm_bm25_scores[idx] > 0:
-                    results.append({
-                        'content': _bm25_corpus[idx],
-                        'source': _bm25_metadata[idx]['source'],
-                        'summary': _bm25_metadata[idx].get('summary', ''),
-                        'score': norm_bm25_scores[idx],
-                        'method': 'keyword'
-                    })
+            max_bm25 = max(bm25_scores) if len(bm25_scores) > 0 else 0
+            
+            if max_bm25 > 0:
+                top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:k*2]
+                for idx in top_indices:
+                    if bm25_scores[idx] > 0:
+                        bm25_hits.append({
+                            'content': _bm25_corpus[idx],
+                            'source': _bm25_metadata[idx]['source'],
+                            'summary': _bm25_metadata[idx].get('summary', ''),
+                            'score': bm25_scores[idx] / max_bm25,
+                        })
         except Exception as e:
-            print(f"BM25 search error: {e}")
+            logger.error(f"BM25 search error: {e}")
     
-    # Deduplicate by file path (keep highest scoring chunk per file)
-    seen_files = {}
-    for result in results:
-        file_path = result['source']
-        # Boost score if filename or summary matches main keyword
-        filename = os.path.basename(file_path).lower() if file_path else ""
-        summary = result.get('summary', '').lower()
+    # 3. Reciprocal Rank Fusion (RRF)
+    # RRF Score = sum(1 / (k + rank))
+    rrf_k = 60
+    rrf_scores = {} # (source, content_hash) -> rrf_score
+    hit_details = {} # (source, content_hash) -> details
+    
+    for rank, hit in enumerate(chroma_hits):
+        key = (hit['source'], hash(hit['content']))
+        rrf_scores[key] = rrf_scores.get(key, 0) + 1.0 / (rrf_k + rank + 1)
+        if key not in hit_details: hit_details[key] = hit
+        hit_details[key]['method'] = 'semantic'
+
+    for rank, hit in enumerate(bm25_hits):
+        key = (hit['source'], hash(hit['content']))
+        rrf_scores[key] = rrf_scores.get(key, 0) + 1.0 / (rrf_k + rank + 1)
+        if key not in hit_details: 
+            hit_details[key] = hit
+            hit_details[key]['method'] = 'keyword'
+        else:
+            hit_details[key]['method'] = 'hybrid'
+
+    # Deduplicate by file path (keep best chunk per file)
+    file_results = {}
+    for key, rrf_score in rrf_scores.items():
+        file_path = key[0]
+        hit = hit_details[key]
+        
+        # Normalize RRF to 0-1 range roughly (max RRF for 2 hits is ~0.032)
+        # We'll use a simpler heuristic for scoring
+        final_score = rrf_score * 30 # Scale to ~1.0
+        
+        # Boost for filename/summary matches
+        filename = os.path.basename(file_path).lower()
+        summary = hit.get('summary', '').lower()
         boost = 0.0
         for kw in main_keywords:
-            if kw in filename or kw in summary:
-                boost = max(boost, 0.3)  # Boost by 0.3 if match
-        score = min(result['score'] + boost, 1.3)  # Cap at 1.3 to prevent excessive inflation
-        if file_path not in seen_files or score > seen_files[file_path]['score']:
-            result['score'] = score
-            seen_files[file_path] = result
+            if kw in filename: boost += 0.2
+            if kw in summary: boost += 0.1
+        
+        final_score = min(final_score + boost, 1.5)
+        
+        if file_path not in file_results or final_score > file_results[file_path]['score']:
+            hit['score'] = final_score
+            file_results[file_path] = hit
 
-    # Convert back to list, filter by min_score, and sort by score
-    unique_results = [r for r in seen_files.values() if r['score'] >= min_score]
+    # Filter and sort
+    unique_results = [r for r in file_results.values() if r['score'] >= min_score]
     unique_results.sort(key=lambda x: x['score'], reverse=True)
-    # Resolve summaries (check DB / generate if missing) to avoid returning placeholders
-    for res in unique_results:
+    
+    # Resolve summaries and status
+    for res in unique_results[:k]:
         try:
             res['summary'] = _resolve_summary_for_file(res.get('source', ''), res.get('summary', ''))
-        except Exception:
-            pass
-    # Attach processing status from metadata DB so frontend can show pending/completed
-    for res in unique_results:
-        try:
             md = metadata_db.get_metadata(res.get('source', ''))
             res['processing_status'] = md.get('processing_status') if md else 'unknown'
         except Exception:
             res['processing_status'] = 'unknown'
+            
     return unique_results[:k]
 
 
@@ -398,7 +424,7 @@ def index_chunks_to_chroma(file_path: str, chunks: List[str]):
             print("Loading embedding model on-demand...")
             _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
         except Exception as e:
-            print(f"Error loading embedding model for chroma indexing: {e}")
+            logger.error(f"Error loading embedding model for chroma indexing: {e}")
             return
 
     try:
@@ -428,7 +454,7 @@ def index_chunks_to_chroma(file_path: str, chunks: List[str]):
             ids=chunk_ids
         )
     except Exception as e:
-        print(f"Error indexing chunks to ChromaDB for {file_path}: {e}")
+        logger.error(f"Error indexing chunks to ChromaDB for {file_path}: {e}")
 
 def get_index_stats() -> Dict:
     """

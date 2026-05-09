@@ -13,6 +13,10 @@ from pathlib import Path
 from contextlib import contextmanager
 import os
 
+from config import get_logger
+
+logger = get_logger("metadata_db")
+
 
 # Database file location
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'filegpt_metadata.db')
@@ -76,7 +80,7 @@ def init_db() -> None:
         conn.commit()
         cursor.close()
     
-    print("✓ Database initialized with WAL mode and optimized schema")
+    logger.info("✓ Database initialized with WAL mode and optimized schema")
 
 
 def calculate_hash(content: str) -> str:
@@ -170,7 +174,7 @@ def store_file_content(path: str, content: str, content_hash: str) -> None:
             
             conn.commit()
         except Exception as e:
-            print(f"Error storing file content for {path}: {e}")
+            logger.error(f"Error storing file content for {path}: {e}")
             conn.rollback()
         finally:
             cursor.close()
@@ -196,7 +200,7 @@ def get_file_content(path: str) -> Optional[str]:
         try:
             return decompress_content(result[0])
         except Exception as e:
-            print(f"Error decompressing content for {path}: {e}")
+            logger.error(f"Error decompressing content for {path}: {e}")
             return None
     return None
 
@@ -217,7 +221,7 @@ def update_processing_status(path: str, status: str) -> None:
             ''', (status, path))
             conn.commit()
         except Exception as e:
-            print(f"Error updating status for {path}: {e}")
+            logger.error(f"Error updating status for {path}: {e}")
             conn.rollback()
         finally:
             cursor.close()
@@ -252,7 +256,7 @@ def upsert_metadata(path: str, content: str, summary: str) -> None:
             
             conn.commit()
         except Exception as e:
-            print(f"Error upserting metadata for {path}: {e}")
+            logger.error(f"Error upserting metadata for {path}: {e}")
             conn.rollback()
         finally:
             cursor.close()
@@ -275,7 +279,7 @@ def update_summary(path: str, summary: str) -> None:
             ''', (summary, path))
             conn.commit()
         except Exception as e:
-            print(f"Error updating summary for {path}: {e}")
+            logger.error(f"Error updating summary for {path}: {e}")
             conn.rollback()
         finally:
             cursor.close()
@@ -342,7 +346,7 @@ def delete_metadata(path: str) -> None:
             cursor.execute('DELETE FROM files WHERE path = ?', (path,))
             conn.commit()
         except Exception as e:
-            print(f"Error deleting metadata for {path}: {e}")
+            logger.error(f"Error deleting metadata for {path}: {e}")
             conn.rollback()
         finally:
             cursor.close()
@@ -487,15 +491,43 @@ def get_stats() -> Dict:
     }
 
 
+def reset_pending_summaries() -> int:
+    """
+    Reset status of all files that have no summary but are not marked as completed.
+    This helps recover from stuck processing.
+    
+    Returns:
+        Number of files reset
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE files 
+                SET processing_status = 'pending_summary' 
+                WHERE summary IS NULL OR summary = ''
+            ''')
+            count = cursor.rowcount
+            conn.commit()
+            logger.info(f"✓ Reset {count} files to pending_summary")
+            return count
+        except Exception as e:
+            logger.error(f"Error resetting pending summaries: {e}")
+            conn.rollback()
+            return 0
+        finally:
+            cursor.close()
+
+
 def vacuum_database() -> None:
     """Run VACUUM to reclaim space from deleted records."""
     with get_db() as conn:
         cursor = conn.cursor()
         try:
-            print("Running database vacuum...")
+            logger.info("Running database vacuum...")
             cursor.execute('VACUUM')
-            print("✓ Database vacuum completed")
+            logger.info("✓ Database vacuum completed")
         except Exception as e:
-            print(f"Error during vacuum: {e}")
+            logger.error(f"Error during vacuum: {e}")
         finally:
             cursor.close()

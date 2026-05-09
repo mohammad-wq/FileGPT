@@ -58,6 +58,9 @@ except ImportError:
     categorization_service = None  # Optional service
 
 # Request schemas
+class PathRequest(BaseModel):
+    path: str
+
 class SearchRequest(BaseModel):
     query: str
     k: Optional[int] = 5
@@ -138,8 +141,10 @@ async def startup_event():
 
     # Start background worker for async embedding/summarization
     from services import background_worker
-    background_worker.start_worker()
-    logger.info("Background worker started")
+    worker = background_worker.get_background_worker()
+    worker.start()
+    worker.load_pending_from_db()
+    logger.info("Background worker started and pending tasks loaded")
 
     # Start Ollama health monitor
     ollama_monitor.start_health_checker()
@@ -151,8 +156,9 @@ async def startup_event():
         session_storage.start_cleanup_scheduler()
         logger.info("Session storage cleanup scheduler started")
     
-    # Use absolute path for testing (limited files for development)
-    test_path = os.path.expanduser("~/Downloads")
+    # Use home directory for most user files
+    import pathlib
+    test_path = str(pathlib.Path.home())
     
     logger.info(f"Test directory: {test_path}")
     
@@ -169,14 +175,16 @@ async def startup_event():
         logger.info(f"Indexed {indexed_count} files")
     
     # Start file watcher for real-time updates
-    def run_watcher():
-        watcher = file_watcher.get_watcher()
-        if os.path.exists(test_path):
-            watcher.add_path(test_path)
-        watcher.start()
+    # (Uses high-performance Rust monitor on Linux)
+    watch_paths = [test_path] if os.path.exists(test_path) else []
     
-    watcher_thread = threading.Thread(target=run_watcher, daemon=True)
-    watcher_thread.start()
+    # Run in a separate thread to prevent blocking startup (as Rust monitor is a subprocess)
+    threading.Thread(
+        target=file_watcher.start_watcher,
+        args=(watch_paths,),
+        kwargs={"backend_url": "http://127.0.0.1:8000"},
+        daemon=True
+    ).start()
     
     logger.info("="*60)
     logger.info("FileGPT Backend Ready")
@@ -186,6 +194,24 @@ async def startup_event():
     logger.info(f"Database: {stats['total_files']} files, {stats['db_size_mb']:.2f} MB")
     logger.info(f"Queue: {stats['pending_embedding']} pending embedding, {stats['pending_summary']} pending summary")
     logger.info("="*60)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up services on shutdown."""
+    logger.info("Shutting down FileGPT Backend...")
+    
+    # Stop file watcher and Rust monitor
+    file_watcher.stop_watcher()
+    
+    # Stop background worker
+    from services import background_worker
+    background_worker.stop_worker()
+    
+    # Stop Ollama health monitor
+    from services import ollama_monitor
+    ollama_monitor.stop_health_checker()
+    
+    logger.info("Shutdown complete")
 
 
 @app.get("/")
@@ -307,12 +333,18 @@ async def ask(request: AskRequest):
     """
     from starlette.concurrency import run_in_threadpool
     
-    # Check Ollama availability
+    # Check Ollama availability gracefully
     if not ollama_monitor.is_ollama_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Ollama service is unavailable. Try again later."
-        )
+        logger.warning("Ollama unavailable - returning textual fallback")
+        return {
+            "answer": "⚠️ Ollama service is currently unavailable. AI features (Agent/RAG) are disabled, but file monitoring and search are still active. Please start Ollama (`ollama serve`) to restore AI functionality.",
+            "sources": [],
+            "intent": "ERROR",
+            "tool_used": "none",
+            "tool_calls": 0,
+            "session_id": request.session_id or "default",
+            "status": "ollama_offline"
+        }
     
     # Use session backend (SQLite or in-memory)
     if SessionConfig.STORAGE_MODE == "sqlite":
@@ -397,12 +429,17 @@ async def ask_rag(request: AskRequest):
     Returns:
         AI-generated answer with sources, grading statistics, and workflow metrics
     """
-    # Check Ollama availability
+    # Check Ollama availability gracefully
     if not ollama_monitor.is_ollama_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Ollama service is unavailable. Try again later."
-        )
+        logger.warning("Ollama unavailable - returning RAG fallback")
+        return {
+            "answer": "⚠️ AI Retrieval is active, but generation is unavailable as Ollama is offline. Please start Ollama (`ollama serve`) or use the standard search for keyword-based results.",
+            "sources": [],
+            "results": [],
+            "query": request.query,
+            "session_id": request.session_id or "default",
+            "status": "ollama_offline"
+        }
     
     # Use session backend (SQLite or in-memory)
     if SessionConfig.STORAGE_MODE == "sqlite":
@@ -453,6 +490,37 @@ async def ask_rag(request: AskRequest):
         logger.error(f"RAG workflow error: {str(e)}", exc_info=True)
         ollama_monitor.record_ollama_failure()
         raise HTTPException(status_code=500, detail=f"RAG workflow error: {str(e)}")
+
+
+@app.post("/open_explorer")
+async def open_explorer(request: PathRequest):
+    """
+    Open the file's containing folder in the OS file manager.
+    """
+    path = request.path
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    import subprocess
+    import platform
+    
+    try:
+        folder = os.path.dirname(path)
+        if platform.system() == "Windows":
+            os.startfile(folder)
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", folder])
+        else:
+            # Use Popen to avoid blocking the API while the explorer is opening
+            subprocess.Popen(["xdg-open", folder], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            
+        return {"status": "success", "message": f"Opened {folder}"}
+    except Exception as e:
+        logger.error(f"Error opening explorer: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/create_folder")
@@ -632,6 +700,19 @@ async def get_watched_folders():
     }
 
 
+@app.get("/files/indexed")
+async def get_indexed_files():
+    """
+    Get all indexed files with their metadata.
+    """
+    from starlette.concurrency import run_in_threadpool
+    files = await run_in_threadpool(metadata_db.get_all_indexed_files)
+    return {
+        "files": files,
+        "count": len(files)
+    }
+
+
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     """
@@ -658,7 +739,7 @@ async def websocket_logs(websocket: WebSocket):
     except WebSocketDisconnect:
         broadcaster.unsubscribe(queue)
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
         broadcaster.unsubscribe(queue)
 
 
@@ -730,8 +811,31 @@ async def monitor_event(request: MonitorEventRequest):
 
 
 # ============================================================================
-# AI CATEGORIZATION ENDPOINTS
+# ADMIN / UTILITY ENDPOINTS
 # ============================================================================
+
+@app.post("/admin/re-summarize")
+async def re_summarize_all():
+    """
+    Trigger re-summarization for all files that are missing a summary.
+    """
+    from starlette.concurrency import run_in_threadpool
+    
+    # Reset status in DB
+    reset_count = await run_in_threadpool(metadata_db.reset_pending_summaries)
+    
+    # Reload worker queue
+    worker = background_worker.get_background_worker()
+    await run_in_threadpool(worker.load_pending_from_db)
+    
+    return {
+        "status": "success",
+        "files_reset": reset_count,
+        "message": f"Successfully reset {reset_count} files for re-summarization"
+    }
+
+
+# AI CATEGORIZATION ENDPOINTS
 
 @app.post("/categorize")
 async def categorize(request: CategorizeRequest):

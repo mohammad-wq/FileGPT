@@ -107,10 +107,27 @@ class APIClient {
     }
 
     /**
+     * Get all indexed files from the database
+     */
+    async getIndexedFiles() {
+        return this.request("/files/indexed");
+    }
+
+    /**
      * List contents of a directory
      */
     async listDirectory(path) {
         return this.request("/list", {
+            method: "POST",
+            body: JSON.stringify({ path }),
+        });
+    }
+
+    /**
+     * Open a file's containing folder in the OS file manager
+     */
+    async openExplorer(path) {
+        return this.request("/open_explorer", {
             method: "POST",
             body: JSON.stringify({ path }),
         });

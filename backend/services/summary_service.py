@@ -7,6 +7,10 @@ import os
 from typing import Optional
 import ollama
 
+from config import get_logger
+
+logger = get_logger("summary_service")
+
 
 # Model configuration
 PRIMARY_MODEL = "qwen2.5:0.5b"  # Only model available, needs ~500MB RAM
@@ -16,27 +20,49 @@ MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 def get_available_model() -> str:
     """
-    Get the first available model from the priority list.
+    Get the best available model from the priority list or find a fallback.
     
     Returns:
         Model name to use
     """
     try:
-        models = ollama.list()
-        model_names = [m.get('name', '') for m in models.get('models', [])]
+        # Get the full list of models
+        models_response = ollama.list()
         
-        # Try primary model first
-        if PRIMARY_MODEL in model_names:
+        # Handle different response formats (object vs dict)
+        if hasattr(models_response, 'models'):
+            # Modern object-based response
+            available_models = [m.model for m in models_response.models]
+        elif isinstance(models_response, dict) and 'models' in models_response:
+            # Older dict-based response
+            available_models = [m.get('name', m.get('model', '')) for m in models_response.get('models', [])]
+        else:
+            available_models = []
+
+        # 1. Try exact match for primary model
+        if PRIMARY_MODEL in available_models:
             return PRIMARY_MODEL
+            
+        # 2. Try partial match for primary model (e.g., "qwen2.5:0.5b:latest")
+        for model in available_models:
+            if PRIMARY_MODEL in model:
+                return model
         
-        # Fall back to same model (only one model available)
-        if FALLBACK_MODEL in model_names:
-            print(f"Note: Using fallback model {FALLBACK_MODEL}")
-            return FALLBACK_MODEL
-        
-        # Default to primary even if not found (will error gracefully later)
+        # 3. Look for ANY qwen2.5 model (different sizes like 1.5b)
+        for model in available_models:
+            if "qwen2.5" in model:
+                logger.info(f"Note: Found alternative model {model}, using it instead of {PRIMARY_MODEL}")
+                return model
+                
+        # 4. Look for ANY qwen model
+        for model in available_models:
+            if "qwen" in model:
+                return model
+
+        # Default to primary if nothing found (will error gracefully later)
         return PRIMARY_MODEL
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error detecting models: {e}")
         return PRIMARY_MODEL
 
 
@@ -51,7 +77,7 @@ def generate_summary(content: str, file_path: str) -> str:
     Returns:
         Generated summary (one sentence, <50 words), or error message if generation fails
     """
-    print(f"📝 Generating summary for {os.path.basename(file_path)}...")
+    logger.info(f"📝 Generating summary for {os.path.basename(file_path)}...")
     
     # Truncate content to fit context window
     truncated_content = content[:MAX_CONTEXT_LENGTH]
@@ -124,19 +150,19 @@ Summary (one sentence, 20 words max):
             summary = summary[8:].strip()
         # Ensure we got a valid summary
         if not summary:
-            print(f"⚠️ Summary generation returned empty for {file_path}")
+            logger.warning(f"⚠️ Summary generation returned empty for {file_path}")
             return role_prefix + "Summary generation returned empty response."
         # Truncate if still too long (safety check)
         words = summary.split()
         if len(words) > 50:
             summary = ' '.join(words[:50]) + '...'
-        print(f"✓ Generated summary for {os.path.basename(file_path)}: {len(words)} words")
+        logger.info(f"✓ Generated summary for {os.path.basename(file_path)}: {len(words)} words")
         # Prepend role prefix for context-aware summary
         return role_prefix + summary
         
     except Exception as e:
         error_msg = str(e)
-        print(f"❌ Summary generation failed for {file_path}: {error_msg[:100]}")
+        logger.error(f"❌ Summary generation failed for {file_path}: {error_msg[:100]}")
         # Return a simple fallback summary based on file type
         file_ext = file_path.split('.')[-1].lower()
         return f"[{file_ext.upper()} file - Summary unavailable]"
@@ -162,7 +188,7 @@ def test_ollama_connection() -> bool:
         )
         return True
     except Exception as e:
-        print(f"Ollama connection test failed: {e}")
+        logger.error(f"Ollama connection test failed: {e}")
         return False
 
 
@@ -181,5 +207,5 @@ def get_model_info() -> Optional[dict]:
                 return model
         return None
     except Exception as e:
-        print(f"Error getting model info: {e}")
+        logger.error(f"Error getting model info: {e}")
         return None

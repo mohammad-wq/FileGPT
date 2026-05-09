@@ -5,12 +5,19 @@ Real-time file system monitoring with automatic indexing.
 
 import os
 import time
-from typing import List, Set
+import subprocess
+import sys
+import platform
+import threading
+from typing import List, Set, Optional
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from services import searchEngine, fileParser
+from config import get_logger
+
+logger = get_logger("file_watcher")
 
 
 # Ignore patterns
@@ -86,7 +93,7 @@ class FileIndexHandler(FileSystemEventHandler):
         
         self._processing.add(file_path)
         try:
-            print(f"New file detected: {file_path}")
+            logger.info(f"New file detected: {file_path}")
             searchEngine.index_file_pipeline(file_path)
         finally:
             self._processing.discard(file_path)
@@ -109,7 +116,7 @@ class FileIndexHandler(FileSystemEventHandler):
         
         self._processing.add(file_path)
         try:
-            print(f"File modified: {file_path}")
+            logger.info(f"File modified: {file_path}")
             searchEngine.index_file_pipeline(file_path)
         finally:
             self._processing.discard(file_path)
@@ -121,7 +128,7 @@ class FileIndexHandler(FileSystemEventHandler):
         
         file_path = event.src_path
         
-        print(f"File deleted: {file_path}")
+        logger.info(f"File deleted: {file_path}")
         searchEngine.delete_file_from_index(file_path)
 
 
@@ -155,10 +162,10 @@ class FileWatcher:
         try:
             self.observer.schedule(self.handler, path, recursive=True)
             self.watched_paths.add(path)
-            print(f"Now watching: {path}")
+            logger.info(f"Now watching: {path}")
             return True
         except Exception as e:
-            print(f"Error adding watch path {path}: {e}")
+            logger.error(f"Error adding watch path {path}: {e}")
             return False
     
     def start(self):
@@ -179,8 +186,91 @@ class FileWatcher:
         return list(self.watched_paths)
 
 
-# Global watcher instance
+class RustMonitorManager:
+    """Manages the external Rust-based Linux monitor."""
+    
+    def __init__(self):
+        self.process: Optional[subprocess.Popen] = None
+        self.monitor_thread: Optional[threading.Thread] = None
+        self.is_running = False
+        self.binary_path = self._find_binary()
+        
+    def _find_binary(self) -> str:
+        """Locate the linux_monitor binary."""
+        # Try absolute path first
+        base_dir = Path("/home/zakwanalam07/FileGPT")
+        
+        paths = [
+            base_dir / "linux_monitor" / "target" / "release" / "linux_monitor",
+            Path(__file__).parent.parent.parent / "linux_monitor" / "target" / "release" / "linux_monitor",
+            Path("/usr/local/bin/linux_monitor")
+        ]
+        
+        for p in paths:
+            if p.exists() and os.access(p, os.X_OK):
+                return str(p)
+        return ""
+
+    def start(self, watch_paths: List[str], backend_url: str = "http://127.0.0.1:8000"):
+        """Start the Rust monitor subprocess."""
+        if not self.binary_path:
+            logger.warning("Rust monitor binary not found. Skipping.")
+            return False
+            
+        if self.is_running:
+            return True
+
+        if not watch_paths:
+            logger.warning("No watch paths provided for Rust monitor.")
+            return False
+
+        # Prepare arguments
+        cmd = [self.binary_path, "--backend-url", backend_url]
+        for p in watch_paths:
+            cmd.extend(["--watch", p])
+            
+        try:
+            logger.info(f"🚀 Starting Rust monitor: {self.binary_path}")
+            # Use PIPE to capture output if needed, but for now just let it run
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+            
+            # Start a thread to log output
+            def log_output():
+                if not self.process or not self.process.stdout:
+                    return
+                for line in self.process.stdout:
+                    logger.info(f"[Rust] {line.strip()}")
+            
+            self.monitor_thread = threading.Thread(target=log_output, daemon=True)
+            self.monitor_thread.start()
+            
+            self.is_running = True
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start Rust monitor: {e}")
+            return False
+
+    def stop(self):
+        """Stop the Rust monitor subprocess."""
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            self.is_running = False
+            print("Rust monitor stopped")
+
+
+# Global watcher instances
 _watcher: FileWatcher = None
+_rust_manager: RustMonitorManager = None
 
 
 def get_watcher() -> FileWatcher:
@@ -191,26 +281,49 @@ def get_watcher() -> FileWatcher:
     return _watcher
 
 
-def start_watcher(paths: List[str] = None):
+def get_rust_manager() -> RustMonitorManager:
+    """Get or create the global Rust monitor manager."""
+    global _rust_manager
+    if _rust_manager is None:
+        _rust_manager = RustMonitorManager()
+    return _rust_manager
+
+
+def start_watcher(paths: List[str] = None, backend_url: str = "http://127.0.0.1:8000"):
     """
     Start the file watcher with optional initial paths.
+    Uses Rust monitor on Linux for better performance.
     
     Args:
         paths: List of directory paths to watch
+        backend_url: URL of this backend for the Rust monitor to POST to
     """
+    # 1. Start Rust monitor on Linux
+    if platform.system() == "Linux":
+        rust_mgr = get_rust_manager()
+        # Fallback to current directory or home if no paths
+        watch_paths = paths if paths else [os.path.expanduser("~")]
+        if rust_mgr.start(watch_paths, backend_url):
+            print("✓ High-performance Rust monitor active")
+            # We still might want the Python watcher for specific cases or as fallback,
+            # but let's stick to Rust on Linux for these paths.
+            return
+
+    # 2. Fallback to Python Watchdog (standard or non-Linux)
     watcher = get_watcher()
-    
     if paths:
         for path in paths:
             watcher.add_path(path)
-    
     watcher.start()
 
 
 def stop_watcher():
-    """Stop the file watcher."""
+    """Stop both Python and Rust file watchers."""
     watcher = get_watcher()
     watcher.stop()
+    
+    rust_mgr = get_rust_manager()
+    rust_mgr.stop()
 
 
 def scan_directory(directory: str) -> int:
@@ -224,12 +337,12 @@ def scan_directory(directory: str) -> int:
         Number of files indexed
     """
     if not os.path.exists(directory) or not os.path.isdir(directory):
-        print(f"Invalid directory: {directory}")
+        logger.error(f"Invalid directory: {directory}")
         return 0
     
     indexed_count = 0
     
-    print(f"Scanning directory: {directory}")
+    logger.info(f"Scanning directory: {directory}")
     
     for root, dirs, files in os.walk(directory):
         # Filter out ignored directories
@@ -251,7 +364,7 @@ def scan_directory(directory: str) -> int:
                 if searchEngine.index_file_pipeline(file_path):
                     indexed_count += 1
             except Exception as e:
-                print(f"Error indexing {file_path}: {e}")
+                logger.error(f"Error indexing {file_path}: {e}")
     
-    print(f"Scan complete: {indexed_count} files indexed")
+    logger.info(f"Scan complete: {indexed_count} files indexed")
     return indexed_count

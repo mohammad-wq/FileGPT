@@ -9,7 +9,10 @@ import time
 from typing import List, Dict, Optional
 import ollama
 
-from services import metadata_db, embeddingGeneration, summary_service
+from services import metadata_db, embeddingGeneration, summary_service, fileParser
+from config import get_logger
+
+logger = get_logger("background_worker")
 
 
 class BackgroundWorker:
@@ -50,39 +53,83 @@ class BackgroundWorker:
         self._summary_seq = 0
         self._seq_lock = threading.Lock()
         
-        print("✓ Background worker initialized")
+        logger.info("Background worker initialized")
+    
+    def load_pending_from_db(self):
+        """
+        Load pending embedding and summary tasks from the database.
+        Ensures work persistence across restarts.
+        """
+        logger.info("Loading pending tasks from database...")
+        
+        # 1. Load pending embeddings
+        pending_embeddings = metadata_db.get_pending_embeddings(limit=10000)
+        for item in pending_embeddings:
+            file_path = item['path']
+            try:
+                # Extract content to generate chunks
+                content = metadata_db.get_file_content(file_path)
+                if not content:
+                    # If content missing from DB, try to read from file
+                    content = fileParser.get_file_content(file_path)
+                    if content:
+                        metadata_db.store_file_content(file_path, content, metadata_db.calculate_hash(content))
+                
+                if content:
+                    # Same chunking logic as searchEngine.py
+                    from langchain_text_splitters import RecursiveCharacterTextSplitter
+                    splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=600,
+                        chunk_overlap=100,
+                        length_function=len,
+                        separators=["\n\n", "\n", ". ", " ", ""]
+                    )
+                    chunks = splitter.split_text(content)
+                    if chunks:
+                        self.add_to_embedding_queue(file_path, chunks)
+                else:
+                    logger.warning(f"Could not load content for pending embedding: {file_path}")
+            except Exception as e:
+                logger.error(f"Error re-queuing pending embedding for {file_path}: {e}")
+        
+        # 2. Load pending summaries
+        pending_summaries = metadata_db.get_pending_summaries(limit=10000)
+        for item in pending_summaries:
+            self.add_to_summary_queue(item['path'])
+            
+        logger.info(f"Re-queued {len(pending_embeddings)} embeddings and {len(pending_summaries)} summaries from DB")
     
     def start(self):
         """Start the background worker thread."""
         if self.running:
-            print("Worker already running")
+            logger.warning("Worker already running")
             return
         
         self.running = True
         self.paused = False
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
-        print("✓ Background worker started")
+        logger.info("✓ Background worker started")
     
     def stop(self):
         """Stop the background worker thread."""
         self.running = False
         if self.worker_thread:
             self.worker_thread.join(timeout=5)
-        print("✓ Background worker stopped")
+        logger.info("✓ Background worker stopped")
     
     def pause(self):
         """Pause background processing (e.g., when user is chatting)."""
         with self.pause_lock:
             self.paused = True
-            print("⏸️  Background worker paused")
+            logger.info("⏸️  Background worker paused")
     
     def resume(self):
         """Resume background processing."""
         with self.pause_lock:
             self.paused = False
             self.pause_condition.notify_all()
-            print("▶️  Background worker resumed")
+            logger.info("▶️  Background worker resumed")
     
     def add_to_embedding_queue(self, file_path: str, chunks: List[str]):
         """
@@ -149,7 +196,7 @@ class BackgroundWorker:
     
     def _worker_loop(self):
         """Main worker loop that processes queues."""
-        print("Worker loop started")
+        logger.info("Worker loop started")
         
         while self.running:
             try:
@@ -169,10 +216,10 @@ class BackgroundWorker:
                     time.sleep(1)
             
             except Exception as e:
-                print(f"Error in worker loop: {e}")
+                logger.error(f"Error in worker loop: {e}")
                 time.sleep(1)
         
-        print("Worker loop stopped")
+        logger.info("Worker loop stopped")
     
     def _process_embedding_batch(self):
         """
@@ -193,7 +240,7 @@ class BackgroundWorker:
         if not batch_items:
             return
         
-        print(f"📦 Processing embedding batch: {len(batch_items)} files")
+        logger.info(f"📦 Processing embedding batch: {len(batch_items)} files")
         
         # Process each file's chunks
         for item in batch_items:
@@ -210,10 +257,10 @@ class BackgroundWorker:
                 # Add to summary queue
                 self.add_to_summary_queue(file_path)
                 
-                print(f"  ✓ Embedded: {file_path}")
+                logger.info(f"  ✓ Embedded: {file_path}")
             
             except Exception as e:
-                print(f"  ✗ Error embedding {item.get('file_path', 'unknown')}: {e}")
+                logger.error(f"  ✗ Error embedding {item.get('file_path', 'unknown')}: {e}")
     
     def _process_summary(self):
         """Process one summarization task."""
@@ -230,7 +277,7 @@ class BackgroundWorker:
             content = metadata_db.get_file_content(file_path)
             
             if not content:
-                print(f"  ✗ No content found for {file_path}")
+                logger.warning(f"  ✗ No content found for {file_path}")
                 return
             
             # Generate summary using LLM
@@ -239,10 +286,10 @@ class BackgroundWorker:
             # Update database with summary
             metadata_db.update_summary(file_path, summary)
             
-            print(f"  ✓ Summarized: {file_path}")
+            logger.info(f"  ✓ Summarized: {file_path}")
         
         except Exception as e:
-            print(f"  ✗ Error summarizing {file_path}: {e}")
+            logger.error(f"  ✗ Error summarizing {file_path}: {e}")
 
 
 # Global worker instance
