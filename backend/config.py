@@ -109,7 +109,7 @@ class OllamaConfig:
     
     # Ollama connection settings
     HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
+    MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
     
     # Health check intervals (seconds)
     HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds

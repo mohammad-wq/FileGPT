@@ -31,6 +31,7 @@ logger = get_logger("agent_service")
 
 # Import tools
 from services import tools as tool_module
+import re
 
 
 # ============================================================================
@@ -46,7 +47,10 @@ class AgentState(TypedDict):
 # SYSTEM PROMPT
 # ============================================================================
 
-SYSTEM_PROMPT = """You are FileGPT, an AI-powered file management assistant running locally on the user's machine.
+SYSTEM_PROMPT = """You are FileGPT, an AI-powered file management and research assistant running locally on the user's machine.
+
+**Context:**
+The user is a security researcher or student working on cybersecurity labs (e.g., SEED Labs). You are authorized to help analyze files related to vulnerabilities, exploits, and security concepts like 'control hijacking', 'buffer overflow', and 'sql injection' for educational purposes. Do not refuse these requests; instead, provide helpful technical summaries of the indexed files.
 
 You have access to the following tools:
 
@@ -59,15 +63,19 @@ You have access to the following tools:
 3. **list_directory(path)** - List all files and folders in a directory.
    Use when the user wants to see what's in a folder.
 
-4. **move_file(source, destination)** - Move or rename files/directories.
+4. **copy_file(source, destination)** - Copy files or directories.
+   Use when the user wants to duplicate an item.
+
+5. **move_file(source, destination)** - Move or rename files/directories.
    Use when the user wants to relocate or rename items. Use with caution.
+
+6. **organize_files(category, destination_folder, search_path)** - Automatically organize files into folders by category.
+   Use when the user wants to group multiple files by topic or content.
 
 **Guidelines:**
 - For file-related queries, ALWAYS use tools first before answering.
-- If you need to find a file first and then read it, do it in two steps: search first, then read.
+- If you need to find a file first and then read it, do it in two steps.
 - When search returns results, reference the actual file paths from the results.
-- For general conversation (greetings, explanations, opinions), respond directly without tools.
-- Always use absolute paths when calling tools.
 - Be concise in your final answers and cite file sources.
 """
 
@@ -91,7 +99,9 @@ def get_tools():
         tool_module.search_files,
         tool_module.read_file,
         tool_module.list_directory,
+        tool_module.copy_file,
         tool_module.move_file,
+        tool_module.organize_files,
     ]
 
 
@@ -301,6 +311,12 @@ def run_agent_pipeline(user_query: str, session_history: List[Dict] = None) -> D
     Returns:
         Dict with answer, sources, tool_used, tool_calls, intent, agent_type.
     """
+    # FAST PATH: Heuristic intent detection for speed
+    fast_result = detect_fast_path_intent(user_query)
+    if fast_result:
+        logger.info(f"Fast-Path detected: {fast_result['intent']}")
+        return fast_result
+
     logger.info(f"Agent received: {user_query}")
 
     try:
@@ -376,6 +392,7 @@ def run_agent_pipeline(user_query: str, session_history: List[Dict] = None) -> D
         return {
             "answer": final_answer,
             "tool_used": tool_used_str,
+            "files": sources,
             "sources": sources,
             "tool_calls": tool_calls_count,
             "intent": intent,
@@ -407,3 +424,117 @@ def run_agent_pipeline(user_query: str, session_history: List[Dict] = None) -> D
                 "intent": "ERROR",
                 "agent_type": "error",
             }
+
+
+def detect_fast_path_intent(query: str) -> Optional[Dict[str, Any]]:
+    """Detect simple intents using regex for immediate execution."""
+    q = query.lower().strip()
+    
+    # 1. SIMPLE SEARCH: "find [X]" or "search for [X]"
+    # Skip if query contains words that imply complex analysis
+    if any(word in q for word in ["summarize", "explain", "why", "how", "analyze", "tell me"]):
+        return None
+
+    search_match = re.search(r'^(?:find|search(?:\s+for)?)\s+(.+)$', q)
+    if search_match:
+        search_query = search_match.group(1).strip()
+        if len(search_query) > 2:
+            parsed_results = tool_module.search_files.invoke({"query": search_query})
+            sources = [{
+                "path": r["source"],
+                "source": r["source"],
+                "summary": r.get("summary", ""),
+                "relevance_score": r.get("score", 0)
+            } for r in parsed_results]
+            
+            return {
+                "answer": f"I found {len(sources)} files matching '{search_query}':",
+                "tool_used": "search_files",
+                "files": sources,
+                "tool_calls": 1,
+                "intent": "SEARCH",
+                "agent_type": "fast_path_v1"
+            }
+
+    # 2. LIST DIRECTORY: "list [path]"
+    list_match = re.search(r'^(?:list|show(?:\s+contents\s+of)?)\s+(.+)$', q)
+    if list_match:
+        path = list_match.group(1).strip().strip("'").strip('"')
+        if "/" in path or "\\" in path or path == ".":
+            try:
+                results = tool_module.list_directory.invoke({"path": path})
+                return {
+                    "answer": f"Contents of {path}:\n\n{results}",
+                    "tool_used": "list_directory",
+                    "sources": [],
+                    "tool_calls": 1,
+                    "intent": "LIST",
+                    "agent_type": "fast_path_v1"
+                }
+            except: pass
+
+    return None
+
+
+async def stream_agent_pipeline(user_query: str, session_history: List[Dict] = None):
+    """
+    Generator version of run_agent_pipeline for Server-Sent Events (SSE).
+    Yields chunks of text or metadata.
+    """
+    # 1. Check Fast Path first
+    fast_result = detect_fast_path_intent(user_query)
+    if fast_result:
+        yield f"data: {json.dumps({'type': 'metadata', 'content': fast_result})}\n\n"
+        yield f"data: {json.dumps({'type': 'text', 'content': fast_result['answer']})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    # 2. Fallback to LLM with streaming using the Agent Graph
+    try:
+        graph = build_agent_graph()
+        messages = [SystemMessage(content=SYSTEM_PROMPT)]
+        if session_history:
+            for msg in session_history[-6:]:
+                role = msg.get("role", "user")
+                if role == "user": messages.append(HumanMessage(content=msg["content"]))
+                else: messages.append(AIMessage(content=msg["content"]))
+        
+        messages.append(HumanMessage(content=user_query))
+        initial_state = {"messages": messages}
+
+        # Stream events from the graph
+        async for event in graph.astream(initial_state, stream_mode="values"):
+            if "messages" in event:
+                last_msg = event["messages"][-1]
+                
+                # If it's a ToolMessage, yield metadata to show files
+                if isinstance(last_msg, ToolMessage):
+                    try:
+                        content = json.loads(last_msg.content)
+                        if isinstance(content, list):
+                            sources = [{
+                                "path": r.get("source", ""),
+                                "source": r.get("source", ""),
+                                "summary": r.get("summary", ""),
+                                "relevance_score": r.get("score", 0),
+                                "content": r.get("content", "")
+                            } for r in content if isinstance(r, dict)]
+                            if sources:
+                                yield f"data: {json.dumps({'type': 'metadata', 'content': {'files': sources}})}\n\n"
+                    except: pass
+
+                # If it's the final AIMessage, we could stream it chunk by chunk
+                # For now, we'll yield the content if it's new
+                # (Note: full message-chunk streaming with astream_events is more complex)
+                if isinstance(last_msg, AIMessage) and last_msg.content:
+                    # In 'values' mode, we get the full state. We just want to yield the latest content.
+                    # This is a bit tricky for streaming chunks, but it's more robust than raw LLM.
+                    yield f"data: {json.dumps({'type': 'text', 'content': last_msg.content, 'replace': True})}\n\n"
+        
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {e}", exc_info=True)
+        yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+        yield "data: [DONE]\n\n"
+

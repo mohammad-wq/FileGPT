@@ -19,6 +19,16 @@
     box-shadow: 0 4px 16px rgba(99, 102, 241, 0.18);
     transform: translateY(-1px) scale(1.03);
 }
+
+/* File Results Container */
+.file-results {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1rem;
+    width: 100%;
+    max-width: 650px;
+}
 /* Component Styles - Redesigned for Clean, Modern UX */
 
 /* ============================================ */
@@ -36,6 +46,8 @@
     animation: fadeIn 0.4s ease-out;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
     max-height: 320px;
+    width: 100%;
+    max-width: 650px;
 }
 
 .file-card-professional:hover {
@@ -119,9 +131,8 @@
 .file-card-pro-path {
     font-size: 0.6875rem;
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: break-all;
     font-family: 'Courier New', monospace;
 }
 
@@ -1155,4 +1166,61 @@
     transform: none;
     color: var(--text-primary);
     background: rgba(255, 255, 255, 0.05);
+}
+/* Thinking Indicator - Animated Dots */
+.thinking-indicator {
+    display: flex;
+    gap: 4px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 12px;
+    width: fit-content;
+    margin-bottom: 8px;
+}
+
+.thinking-indicator span {
+    width: 6px;
+    height: 6px;
+    background-color: var(--accent-primary);
+    border-radius: 50%;
+    display: inline-block;
+    animation: thinking-dots 1.4s infinite ease-in-out both;
+}
+
+.thinking-indicator span:nth-child(1) { animation-delay: -0.32s; }
+.thinking-indicator span:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes thinking-dots {
+    0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+    40% { transform: scale(1.0); opacity: 1; }
+}
+
+.stop-prompt-btn {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.stop-prompt-btn:hover {
+    background: #ef4444;
+    color: white;
+}
+
+.message.thinking {
+    animation: fadeIn 0.3s ease-out;
+}
+
+.message.thinking .message-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }

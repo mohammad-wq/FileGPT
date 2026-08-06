@@ -164,6 +164,9 @@ body { background: var(--bg-primary); color: var(--text-primary); height: 100vh;
   border-radius: 12px; 
   padding: 1rem 1.25rem;
   line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 .input-area { padding: 1.5rem 2rem; background: var(--bg-primary); border-top: 1px solid var(--border-color); }
 .input-container { display: flex; gap: 1.25rem; width: 100%; align-items: center; }

@@ -97,7 +97,7 @@ def route_query(user_query: str) -> dict:
 
         # Initialize Ollama with LangChain
         llm = ChatOllama(
-            model="qwen2.5:0.5b",
+            model="qwen2.5:1.5b",
             temperature=0.1,
             num_predict=300,
         )

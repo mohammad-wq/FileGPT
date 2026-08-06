@@ -32,6 +32,7 @@ function AppContent() {
   const [currentView, setCurrentView] = useState("dashboard");
   const messagesEndRef = useRef(null);
   const [showAllFilesIdx, setShowAllFilesIdx] = useState(null); 
+  const abortControllerRef = useRef(null);
   const { open: sidebarOpen } = useSidebar();
 
   useEffect(() => {
@@ -53,17 +54,22 @@ function AppContent() {
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!query.trim() || isLoading) return;
+    
     const currentQuery = query.trim();
     setMessages((prev) => [...prev, { role: "user", content: currentQuery }]);
     setQuery("");
     setIsLoading(true);
+
+    // Create new abort controller
+    abortControllerRef.current = new AbortController();
+    
     try {
       // Intent parsing and routing
       const lowerQuery = currentQuery.toLowerCase();
       if (lowerQuery.includes("organize") || lowerQuery.includes("move")) {
         const dest = parseDestinationPath(currentQuery);
         const cat = parseCategoryDescription(currentQuery);
-        const resp = await apiClient.categorize(cat, null, 100);
+        const resp = await apiClient.categorize(cat, null, 100, { signal: abortControllerRef.current.signal });
         const plan = {
           category: cat,
           destinationFolder: dest || `Desktop/${cat}`,
@@ -71,12 +77,56 @@ function AppContent() {
         };
         setMessages(prev => [...prev, { role: "assistant", content: "Review plan:", type: "organize-plan", plan }]);
       } else {
-        const response = await apiClient.ask(currentQuery, 5);
-        setMessages(prev => [...prev, { role: "assistant", content: response.answer, files: response.results || [] }]);
+        let currentAnswer = "";
+        setMessages(prev => [...prev, { role: "assistant", content: "" }]);
+        
+        await apiClient.askStream(currentQuery, 5, null, (chunk) => {
+          if (chunk.type === "text") {
+            if (chunk.replace) {
+              currentAnswer = chunk.content;
+            } else {
+              currentAnswer += chunk.content;
+            }
+            setMessages(prev => {
+              const newMessages = [...prev];
+              const lastIdx = newMessages.length - 1;
+              newMessages[lastIdx] = { ...newMessages[lastIdx], content: currentAnswer };
+              return newMessages;
+            });
+          } else if (chunk.type === "metadata") {
+            setMessages(prev => {
+              const newMessages = [...prev];
+              const lastIdx = newMessages.length - 1;
+              const updatedMsg = { ...newMessages[lastIdx], ...chunk.content };
+              
+              // Compatibility: map sources to files if needed
+              if (updatedMsg.sources && !updatedMsg.files) {
+                updatedMsg.files = updatedMsg.sources;
+              }
+              
+              newMessages[lastIdx] = updatedMsg;
+              return newMessages;
+            });
+          }
+        }, { signal: abortControllerRef.current.signal });
       }
     } catch (error) {
-      setMessages(prev => [...prev, { role: "assistant", content: `Error: ${error.message}`, error: true }]);
-    } finally { setIsLoading(false); }
+      if (error.name === 'AbortError' || error.message === 'canceled') {
+        setMessages(prev => [...prev, { role: "assistant", content: "_Request cancelled._", isSystem: true }]);
+      } else {
+        const errorMsg = typeof error.message === 'string' ? error.message : JSON.stringify(error.message);
+        setMessages(prev => [...prev, { role: "assistant", content: `Error: ${errorMsg}`, error: true }]);
+      }
+    } finally { 
+      setIsLoading(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleStopPrompt = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
   };
 
   return (
@@ -155,6 +205,7 @@ function AppContent() {
             <ChatView 
               messages={messages} 
               handleSendMessage={handleSendMessage} 
+              handleStopPrompt={handleStopPrompt}
               query={query} 
               setQuery={setQuery} 
               isLoading={isLoading} 

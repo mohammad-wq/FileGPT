@@ -37,15 +37,15 @@ try:
     available_models = [m.get('model', m.get('name')) for m in models_response.get('models', [])]
     print(f"DEBUG: Installed models: {available_models}")
 
-    # Check for qwen2.5:0.5b (flexible matching)
-    has_qwen = any('qwen2.5:0.5b' in str(name) for name in available_models)
+    # Check for qwen2.5:1.5b (flexible matching)
+    has_qwen = any('qwen2.5:1.5b' in str(name) for name in available_models)
     
     if has_qwen:
-        print("✓ Found qwen2.5:0.5b - all LLM features ready (500MB RAM)")
+        print("✓ Found qwen2.5:1.5b - all LLM features ready (1.5GB RAM)")
     else:
-        print("\n[WARNING] qwen2.5:0.5b model not found in the list above.")
-        print("  Required: 'qwen2.5:0.5b'")
-        print("  Install with: ollama pull qwen2.5:0.5b")
+        print("\n[WARNING] qwen2.5:1.5b model not found in the list above.")
+        print("  Required: 'qwen2.5:1.5b'")
+        print("  Install with: ollama pull qwen2.5:1.5b")
         print("  The server will start but AI features will fail.\n")
 
 except Exception as e:

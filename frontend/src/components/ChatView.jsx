@@ -15,7 +15,8 @@ export default function ChatView({
   setOrganizationPlan,
   showAllFilesIdx,
   setShowAllFilesIdx,
-  messagesEndRef
+  messagesEndRef,
+  handleStopPrompt
 }) {
   const [activeTab, setActiveTab] = useState("chat"); // 'chat' or 'search'
 
@@ -77,13 +78,30 @@ export default function ChatView({
                   </div>
                 ))
               )}
+              {isLoading && (
+                <div className="message assistant thinking">
+                  <div className="message-avatar">
+                    <Bot size={18} color="var(--accent-primary)" />
+                  </div>
+                  <div className="message-content">
+                    <div className="thinking-indicator">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                    <button className="stop-prompt-btn" onClick={handleStopPrompt}>
+                      Stop Generating
+                    </button>
+                  </div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
             <div className="input-area">
               <form onSubmit={handleSendMessage} className="input-container">
                 <textarea className="query-input" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={handleKeyDown} placeholder="Ask FileGPT anything..." rows="1" disabled={isLoading || backendStatus === "offline"} />
                 <button type="submit" className="send-button" disabled={isLoading || !query.trim() || backendStatus === "offline"}>
-                  {isLoading ? "Thinking..." : <><Send size={18} /> Send</>}
+                  <Send size={18} /> Send
                 </button>
               </form>
             </div>

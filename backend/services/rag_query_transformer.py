@@ -51,7 +51,7 @@ Return ONLY the rewritten query, nothing else."""
                 messages=[{"role": "user", "content": transform_prompt}],
                 options={"temperature": 0.3, "num_predict": 50}
             )
-            
+         
             transformed = response['message']['content'].strip()
             
             if transformed and transformed != original_query:

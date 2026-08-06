@@ -23,7 +23,11 @@ class APIClient {
 
             if (!response.ok) {
                 const error = await response.json().catch(() => ({}));
-                throw new Error(error.detail || `API Error: ${response.status}`);
+                let detail = error.detail;
+                if (Array.isArray(detail)) {
+                    detail = detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join(', ');
+                }
+                throw new Error(detail || `API Error: ${response.status}`);
             }
 
             return await response.json();
@@ -54,7 +58,7 @@ class APIClient {
      * Ask a question and get AI-generated answer with context
      * Supports conversation history via session_id
      */
-    async ask(query, k = 5, sessionId = null) {
+    async ask(query, k = 5, sessionId = null, options = {}) {
         const body = { query, k };
         if (sessionId) {
             body.session_id = sessionId;
@@ -63,7 +67,53 @@ class APIClient {
         return this.request("/ask", {
             method: "POST",
             body: JSON.stringify(body),
+            ...options
         });
+    }
+    
+    /**
+     * Ask a question and get a streaming response (SSE)
+     */
+    async askStream(query, k = 5, sessionId = null, onChunk, options = {}) {
+        const body = { query, k };
+        if (sessionId) body.session_id = sessionId;
+
+        const response = await fetch(`${API_BASE}/ask_stream`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            ...options
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || `API Error: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                const trimmedLine = line.trim();
+                if (trimmedLine.startsWith("data: ")) {
+                    const data = trimmedLine.slice(6).trim();
+                    if (data === "[DONE]") continue;
+                    try {
+                        const parsed = JSON.parse(data);
+                        onChunk(parsed);
+                    } catch (e) { console.error("Error parsing stream chunk:", e); }
+                }
+            }
+        }
     }
 
     /**
@@ -176,7 +226,7 @@ class APIClient {
     /**
      * Categorize files based on description
      */
-    async categorize(categoryDescription, searchPath = null, maxFiles = 100) {
+    async categorize(categoryDescription, searchPath = null, maxFiles = 100, options = {}) {
         return this.request("/categorize", {
             method: "POST",
             body: JSON.stringify({
@@ -184,6 +234,7 @@ class APIClient {
                 search_path: searchPath,
                 max_files: maxFiles,
             }),
+            ...options
         });
     }
 

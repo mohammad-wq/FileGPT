@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from langchain_core.tools import tool
 
 # Import existing services
-from services import searchEngine, fileParser
+from services import searchEngine, fileParser, categorization_service
 
 
 # ============================================================================
@@ -162,6 +162,40 @@ def list_directory(path: str) -> str:
 
 
 @tool
+def copy_file(source: str, destination: str) -> str:
+    """
+    Copy a file or directory to a new location.
+    
+    Args:
+        source: Absolute path to the source file/directory
+        destination: Absolute path to the destination (including filename or target folder)
+        
+    Returns:
+        Success or error message
+    """
+    try:
+        if not os.path.exists(source):
+            return f"Error: Source not found: {source}"
+            
+        # Handle directory destination
+        if os.path.isdir(destination):
+            dest_path = os.path.join(destination, os.path.basename(source))
+        else:
+            dest_path = destination
+            
+        # Ensure parent directory exists
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        
+        if os.path.isdir(source):
+            shutil.copytree(source, dest_path, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, dest_path)
+            
+        return f"Successfully copied {source} to {dest_path}"
+    except Exception as e:
+        return f"Error copying file: {str(e)}"
+
+@tool
 def move_file(source: str, destination: str) -> str:
     """
     Move or rename a file or directory.
@@ -203,6 +237,55 @@ def move_file(source: str, destination: str) -> str:
         return f"Error moving file: {str(e)}"
 
 
+@tool
+def organize_files(category: str, destination_folder: str, search_path: Optional[str] = None) -> str:
+    """
+    Automatically find and organize files into a folder based on a category description.
+    
+    Use this tool when the user wants to:
+    - Group similar files together (e.g., "organize my python scripts")
+    - Clean up a directory by categorizing files
+    - Automatically move files that match a topic to a specific folder
+    
+    Args:
+        category: Natural language description of files to organize (e.g., "machine learning papers")
+        destination_folder: Absolute path to the folder where files should be moved
+        search_path: Optional absolute path to limit the search scope (default: root)
+    
+    Returns:
+        Summary of the organization results
+    """
+    try:
+        # Perform auto-organization
+        result = categorization_service.auto_organize_by_category(
+            category_description=category,
+            destination_folder=destination_folder,
+            search_path=search_path,
+            min_confidence=0.6,
+            dry_run=False
+        )
+        
+        if result["status"] == "no_matches":
+            return f"❌ No files found matching '{category}' in {search_path or 'the system'}."
+            
+        moved_count = len(result["files_moved"])
+        error_count = len(result["errors"])
+        
+        output = [
+            f"✅ Successfully organized files into: {destination_folder}",
+            f"   Category: {category}",
+            f"   Files moved: {moved_count}",
+        ]
+        
+        if error_count > 0:
+            output.append(f"   Errors encountered: {error_count}")
+            
+        return "\n".join(output)
+        
+    except Exception as e:
+        return f"Error organizing files: {str(e)}"
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -225,7 +308,8 @@ AVAILABLE_TOOLS = [
     search_files,
     read_file,
     list_directory,
-    move_file
+    move_file,
+    organize_files
 ]
 
 # Tool descriptions for system prompt (helps LLM choose the right tool)
@@ -249,6 +333,11 @@ You have access to the following tools to help users with their file management 
    - Use when: User wants to relocate or rename items
    - Examples: "move file.txt to Documents", "rename old.txt to new.txt"
    - ⚠️ Use with caution: This modifies the file system
+
+5. **organize_files**: Automatically organize files into folders by category
+   - Use when: User wants to group files by topic or content
+   - Examples: "organize my invoices into a folder named Invoices", "group all my research papers"
+   - ⚠️ Use with caution: This moves multiple files at once
 
 **Important Guidelines:**
 - For general questions not requiring file operations, respond directly without using tools

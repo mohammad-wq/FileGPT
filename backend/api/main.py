@@ -11,6 +11,7 @@ from typing import List, Optional
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -410,6 +411,35 @@ async def ask(request: AskRequest):
             status_code=500, 
             detail=f"Error processing query with agent: {str(e)}"
         )
+
+
+@app.post("/ask_stream")
+async def ask_stream(request: AskRequest):
+    """
+    Stream AI-generated answer using Server-Sent Events (SSE).
+    Provides real-time feedback and better perceived performance.
+    """
+    # Check Ollama availability gracefully
+    if not ollama_monitor.is_ollama_available():
+        async def fallback_stream():
+            msg = "⚠️ Ollama service is currently unavailable. Please start Ollama to restore AI functionality."
+            yield f"data: {json.dumps({'type': 'text', 'content': msg})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(fallback_stream(), media_type="text/event-stream")
+
+    # Use session backend
+    if SessionConfig.STORAGE_MODE == "sqlite":
+        session_mgr = session_storage.get_persistent_storage()
+    else:
+        session_mgr = session_service.get_session_manager()
+    
+    session_id = request.session_id or session_mgr.create_session()
+    conversation_history = session_mgr.get_history(session_id)
+
+    return StreamingResponse(
+        agent_service.stream_agent_pipeline(request.query, conversation_history),
+        media_type="text/event-stream"
+    )
 
 
 @app.post("/ask_rag")

@@ -13,8 +13,8 @@ logger = get_logger("summary_service")
 
 
 # Model configuration
-PRIMARY_MODEL = "qwen2.5:0.5b"  # Only model available, needs ~500MB RAM
-FALLBACK_MODEL = "qwen2.5:0.5b"  # Same as primary since only one model is available
+PRIMARY_MODEL = "qwen2.5:1.5b"  # 1.5b model, needs ~1.5GB RAM
+FALLBACK_MODEL = "qwen2.5:1.5b"  # Same as primary since it's the target model
 MAX_CONTEXT_LENGTH = 8000  # Characters to send to LLM
 
 
@@ -43,7 +43,7 @@ def get_available_model() -> str:
         if PRIMARY_MODEL in available_models:
             return PRIMARY_MODEL
             
-        # 2. Try partial match for primary model (e.g., "qwen2.5:0.5b:latest")
+        # 2. Try partial match for primary model (e.g., "qwen2.5:1.5b:latest")
         for model in available_models:
             if PRIMARY_MODEL in model:
                 return model
